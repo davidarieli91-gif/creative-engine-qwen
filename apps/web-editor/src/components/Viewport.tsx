@@ -1,5 +1,17 @@
 import { useEffect, useRef } from 'react'
-import { Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, MeshBuilder, StandardMaterial, Color3 } from '@babylonjs/core'
+import {
+  Engine,
+  Scene,
+  ArcRotateCamera,
+  Vector3,
+  HemisphericLight,
+  MeshBuilder,
+  StandardMaterial,
+  Color3,
+  ActionManager,
+  ExecuteCodeAction,
+  Mesh
+} from '@babylonjs/core'
 import { SceneObject } from './Editor'
 
 interface ViewportProps {
@@ -10,16 +22,25 @@ interface ViewportProps {
 
 export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const engineRef = useRef<Engine | null>(null)
   const sceneRef = useRef<Scene | null>(null)
-  const meshesRef = useRef<Map<string, any>>(new Map())
+  const meshesRef = useRef<Map<string, Mesh>>(new Map())
+  const objectsRef = useRef<SceneObject[]>(objects)
+  const onSelectRef = useRef(onSelect)
+
+  useEffect(() => {
+    objectsRef.current = objects
+  }, [objects])
+
+  useEffect(() => {
+    onSelectRef.current = onSelect
+  }, [onSelect])
 
   useEffect(() => {
     if (!canvasRef.current) return
 
     const engine = new Engine(canvasRef.current, true)
     const scene = new Scene(engine)
-    
+
     const camera = new ArcRotateCamera(
       'camera',
       Math.PI / 2,
@@ -43,12 +64,13 @@ export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
     const handleResize = () => engine.resize()
     window.addEventListener('resize', handleResize)
 
-    engineRef.current = engine
     sceneRef.current = scene
 
     return () => {
       window.removeEventListener('resize', handleResize)
       engine.dispose()
+      sceneRef.current = null
+      meshesRef.current.clear()
     }
   }, [])
 
@@ -56,8 +78,8 @@ export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
     const scene = sceneRef.current
     if (!scene) return
 
-    const currentIds = new Set(objects.map(obj => obj.id))
-    
+    const currentIds = new Set(objects.map((obj) => obj.id))
+
     meshesRef.current.forEach((mesh, id) => {
       if (!currentIds.has(id)) {
         mesh.dispose()
@@ -65,9 +87,9 @@ export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
       }
     })
 
-    objects.forEach(obj => {
+    objects.forEach((obj) => {
       let mesh = meshesRef.current.get(obj.id)
-      
+
       if (!mesh) {
         switch (obj.type) {
           case 'cube':
@@ -88,12 +110,12 @@ export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
         material.diffuseColor = new Color3(0.2, 0.5, 0.8)
         mesh.material = material
 
-        mesh.actionManager = new (scene as any).actionManager()
+        mesh.actionManager = new ActionManager(scene)
         mesh.actionManager.registerAction(
-          new (scene as any).executeCodeAction(
-            (scene as any).actionManager.OnPickTrigger,
-            () => onSelect(obj)
-          )
+          new ExecuteCodeAction(ActionManager.OnPickTrigger, () => {
+            const latest = objectsRef.current.find((o) => o.id === obj.id)
+            if (latest) onSelectRef.current(latest)
+          })
         )
 
         meshesRef.current.set(obj.id, mesh)
@@ -107,18 +129,19 @@ export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
       )
       mesh.scaling = new Vector3(obj.scale.x, obj.scale.y, obj.scale.z)
 
+      const mat = mesh.material as StandardMaterial
       if (selectedObject?.id === obj.id) {
-        mesh.material.diffuseColor = new Color3(0.8, 0.3, 0.3)
+        mat.diffuseColor = new Color3(0.8, 0.3, 0.3)
       } else {
-        mesh.material.diffuseColor = new Color3(0.2, 0.5, 0.8)
+        mat.diffuseColor = new Color3(0.2, 0.5, 0.8)
       }
     })
-  }, [objects, selectedObject, onSelect])
+  }, [objects, selectedObject])
 
   return (
-    <canvas 
-      ref={canvasRef} 
-      style={{ width: '100%', height: '100%' }}
+    <canvas
+      ref={canvasRef}
+      style={{ width: '100%', height: '100%', outline: 'none' }}
     />
   )
 }
