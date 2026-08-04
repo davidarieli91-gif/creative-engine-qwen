@@ -1,9 +1,28 @@
-import { ObjectBehaviors, SceneObject } from './Editor'
+import { ColorRGB, ObjectBehaviors, SceneObject } from './Editor'
 
 interface InspectorProps {
   object: SceneObject | null
   onUpdate: (obj: SceneObject) => void
   onDelete: (id: string) => void
+}
+
+const DEFAULT_COLOR: ColorRGB = { r: 0.2, g: 0.5, b: 0.8 }
+
+function rgbToHex(c: ColorRGB): string {
+  const to = (v: number) =>
+    Math.round(Math.max(0, Math.min(1, v)) * 255)
+      .toString(16)
+      .padStart(2, '0')
+  return `#${to(c.r)}${to(c.g)}${to(c.b)}`
+}
+
+function hexToRgb(hex: string): ColorRGB {
+  const h = hex.replace('#', '')
+  return {
+    r: parseInt(h.slice(0, 2), 16) / 255,
+    g: parseInt(h.slice(2, 4), 16) / 255,
+    b: parseInt(h.slice(4, 6), 16) / 255
+  }
 }
 
 export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
@@ -18,8 +37,10 @@ export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
   const behaviors: ObjectBehaviors = object.behaviors ?? {
     spin: false,
     bounce: false,
-    patrol: false
+    patrol: false,
+    player: false
   }
+  const color = object.color ?? DEFAULT_COLOR
 
   const updateProperty = (property: keyof SceneObject, value: any) => {
     onUpdate({ ...object, [property]: value })
@@ -69,6 +90,24 @@ export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
       </div>
 
       <div className="property-group">
+        <div className="property-label">Color</div>
+        <input
+          type="color"
+          value={rgbToHex(color)}
+          onChange={(e) => updateProperty('color', hexToRgb(e.target.value))}
+          style={{
+            width: '100%',
+            height: '32px',
+            background: '#1e1e1e',
+            border: '1px solid #3e3e42',
+            borderRadius: '4px',
+            padding: '2px',
+            cursor: 'pointer'
+          }}
+        />
+      </div>
+
+      <div className="property-group">
         <div className="property-label">Position</div>
         <div style={{ display: 'flex', gap: '4px' }}>
           <input className="property-input" type="number" step="0.1" value={object.position.x}
@@ -106,6 +145,11 @@ export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
 
       <div className="property-group">
         <div className="property-label">Behavior (работает в Play mode)</div>
+        <label style={labelStyle}>
+          <input type="checkbox" checked={behaviors.player}
+            onChange={(e) => updateBehavior('player', e.target.checked)} />
+           Player — управление WASD / стрелки
+        </label>
         <label style={labelStyle}>
           <input type="checkbox" checked={behaviors.spin}
             onChange={(e) => updateBehavior('spin', e.target.checked)} />
