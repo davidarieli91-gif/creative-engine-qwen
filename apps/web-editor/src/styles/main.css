@@ -1,0 +1,166 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  background: #1e1e1e;
+  color: #e0e0e0;
+  overflow: hidden;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+}
+
+.editor-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.editor-main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.panel {
+  background: #252526;
+  border: 1px solid #3e3e42;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-header {
+  background: #2d2d30;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.panel-header:hover {
+  background: #333337;
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.panel-content.collapsed {
+  display: none;
+}
+
+.left-panel {
+  width: 250px;
+  border-right: 1px solid #3e3e42;
+}
+
+.right-panel {
+  width: 300px;
+  border-left: 1px solid #3e3e42;
+}
+
+.viewport {
+  flex: 1;
+  background: #1e1e1e;
+  position: relative;
+}
+
+.viewport canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.toolbar {
+  background: #333337;
+  padding: 8px 12px;
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid #3e3e42;
+}
+
+.btn {
+  background: #0e639c;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn:hover {
+  background: #1177bb;
+}
+
+.btn-danger {
+  background: #a1260d;
+}
+
+.btn-danger:hover {
+  background: #c72e0f;
+}
+
+.object-item {
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  background: #2d2d30;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.object-item:hover {
+  background: #3e3e42;
+}
+
+.object-item.selected {
+  background: #094771;
+}
+
+.property-group {
+  margin-bottom: 12px;
+}
+
+.property-label {
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 4px;
+}
+
+.property-input {
+  width: 100%;
+  background: #1e1e1e;
+  border: 1px solid #3e3e42;
+  color: #e0e0e0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.property-input:focus {
+  outline: none;
+  border-color: #0e639c;
+}
+
+.collapse-icon {
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.collapse-icon.collapsed {
+  transform: rotate(-90deg);
+}
