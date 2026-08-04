@@ -1,4 +1,4 @@
-import { SceneObject } from './Editor'
+import { ObjectBehaviors, SceneObject } from './Editor'
 
 interface InspectorProps {
   object: SceneObject | null
@@ -13,6 +13,12 @@ export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
         Select an object to see its properties
       </p>
     )
+  }
+
+  const behaviors: ObjectBehaviors = object.behaviors ?? {
+    spin: false,
+    bounce: false,
+    patrol: false
   }
 
   const updateProperty = (property: keyof SceneObject, value: any) => {
@@ -33,6 +39,19 @@ export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
     })
   }
 
+  const updateBehavior = (key: keyof ObjectBehaviors, value: boolean) => {
+    onUpdate({ ...object, behaviors: { ...behaviors, [key]: value } })
+  }
+
+  const labelStyle = {
+    display: 'flex',
+    gap: '6px',
+    alignItems: 'center',
+    fontSize: '12px',
+    marginBottom: '4px',
+    cursor: 'pointer'
+  } as const
+
   return (
     <div>
       <div className="property-group">
@@ -52,95 +71,60 @@ export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
       <div className="property-group">
         <div className="property-label">Position</div>
         <div style={{ display: 'flex', gap: '4px' }}>
-          <input
-            className="property-input"
-            type="number"
-            step="0.1"
-            value={object.position.x}
-            onChange={(e) => updateVector('position', 'x', parseFloat(e.target.value) || 0)}
-            placeholder="X"
-          />
-          <input
-            className="property-input"
-            type="number"
-            step="0.1"
-            value={object.position.y}
-            onChange={(e) => updateVector('position', 'y', parseFloat(e.target.value) || 0)}
-            placeholder="Y"
-          />
-          <input
-            className="property-input"
-            type="number"
-            step="0.1"
-            value={object.position.z}
-            onChange={(e) => updateVector('position', 'z', parseFloat(e.target.value) || 0)}
-            placeholder="Z"
-          />
+          <input className="property-input" type="number" step="0.1" value={object.position.x}
+            onChange={(e) => updateVector('position', 'x', parseFloat(e.target.value) || 0)} placeholder="X" />
+          <input className="property-input" type="number" step="0.1" value={object.position.y}
+            onChange={(e) => updateVector('position', 'y', parseFloat(e.target.value) || 0)} placeholder="Y" />
+          <input className="property-input" type="number" step="0.1" value={object.position.z}
+            onChange={(e) => updateVector('position', 'z', parseFloat(e.target.value) || 0)} placeholder="Z" />
         </div>
       </div>
 
       <div className="property-group">
         <div className="property-label">Rotation</div>
         <div style={{ display: 'flex', gap: '4px' }}>
-          <input
-            className="property-input"
-            type="number"
-            step="1"
-            value={object.rotation.x}
-            onChange={(e) => updateVector('rotation', 'x', parseFloat(e.target.value) || 0)}
-            placeholder="X"
-          />
-          <input
-            className="property-input"
-            type="number"
-            step="1"
-            value={object.rotation.y}
-            onChange={(e) => updateVector('rotation', 'y', parseFloat(e.target.value) || 0)}
-            placeholder="Y"
-          />
-          <input
-            className="property-input"
-            type="number"
-            step="1"
-            value={object.rotation.z}
-            onChange={(e) => updateVector('rotation', 'z', parseFloat(e.target.value) || 0)}
-            placeholder="Z"
-          />
+          <input className="property-input" type="number" step="1" value={object.rotation.x}
+            onChange={(e) => updateVector('rotation', 'x', parseFloat(e.target.value) || 0)} placeholder="X" />
+          <input className="property-input" type="number" step="1" value={object.rotation.y}
+            onChange={(e) => updateVector('rotation', 'y', parseFloat(e.target.value) || 0)} placeholder="Y" />
+          <input className="property-input" type="number" step="1" value={object.rotation.z}
+            onChange={(e) => updateVector('rotation', 'z', parseFloat(e.target.value) || 0)} placeholder="Z" />
         </div>
       </div>
 
       <div className="property-group">
         <div className="property-label">Scale</div>
         <div style={{ display: 'flex', gap: '4px' }}>
-          <input
-            className="property-input"
-            type="number"
-            step="0.1"
-            value={object.scale.x}
-            onChange={(e) => updateVector('scale', 'x', parseFloat(e.target.value) || 0)}
-            placeholder="X"
-          />
-          <input
-            className="property-input"
-            type="number"
-            step="0.1"
-            value={object.scale.y}
-            onChange={(e) => updateVector('scale', 'y', parseFloat(e.target.value) || 0)}
-            placeholder="Y"
-          />
-          <input
-            className="property-input"
-            type="number"
-            step="0.1"
-            value={object.scale.z}
-            onChange={(e) => updateVector('scale', 'z', parseFloat(e.target.value) || 0)}
-            placeholder="Z"
-          />
+          <input className="property-input" type="number" step="0.1" value={object.scale.x}
+            onChange={(e) => updateVector('scale', 'x', parseFloat(e.target.value) || 0)} placeholder="X" />
+          <input className="property-input" type="number" step="0.1" value={object.scale.y}
+            onChange={(e) => updateVector('scale', 'y', parseFloat(e.target.value) || 0)} placeholder="Y" />
+          <input className="property-input" type="number" step="0.1" value={object.scale.z}
+            onChange={(e) => updateVector('scale', 'z', parseFloat(e.target.value) || 0)} placeholder="Z" />
         </div>
       </div>
 
-      <button 
-        className="btn btn-danger" 
+      <div className="property-group">
+        <div className="property-label">Behavior (работает в Play mode)</div>
+        <label style={labelStyle}>
+          <input type="checkbox" checked={behaviors.spin}
+            onChange={(e) => updateBehavior('spin', e.target.checked)} />
+          Spin — вращаться
+        </label>
+        <label style={labelStyle}>
+          <input type="checkbox" checked={behaviors.bounce}
+            onChange={(e) => updateBehavior('bounce', e.target.checked)} />
+          Bounce — прыгать
+        </label>
+        <label style={labelStyle}>
+          <input type="checkbox" checked={behaviors.patrol}
+            onChange={(e) => updateBehavior('patrol', e.target.checked)} />
+          Patrol — ходить туда-сюда
+        </label>
+      </div>
+
+      <button
+        className="btn btn-danger"
         style={{ width: '100%', marginTop: '12px' }}
         onClick={() => onDelete(object.id)}
       >
