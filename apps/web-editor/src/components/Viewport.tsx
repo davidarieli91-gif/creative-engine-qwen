@@ -12,8 +12,8 @@ import {
   Color4,
   ActionManager,
   ExecuteCodeAction,
-  GizmoManager,
-  Mesh
+  Mesh,
+  GizmoManager
 } from '@babylonjs/core'
 import { SceneObject } from './Editor'
 import { GizmoMode } from './Toolbar'
@@ -44,6 +44,7 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
   const isPlayingRef = useRef(isPlaying)
   const keysRef = useRef<Set<string>>(new Set())
   const playStartRef = useRef(0)
+  const currentGizmoModeRef = useRef<GizmoMode>('position')
 
   useEffect(() => {
     objectsRef.current = objects
@@ -107,9 +108,9 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
     ground.material = groundMaterial
 
     const gizmoManager = new GizmoManager(scene)
-    gizmoManager.positionGizmo.enabled = false
-    gizmoManager.rotationGizmo.enabled = false
-    gizmoManager.scaleGizmo.enabled = false
+    gizmoManager.boundingBoxGizmoEnabled = false
+    gizmoManager.boundingBoxDragBehaviorEnabled = false
+    gizmoManager.usePointerToAttachGizmos = false
     gizmoRef.current = gizmoManager
 
     const commitTransform = () => {
@@ -119,14 +120,23 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
       if (!mesh) return
       onUpdateRef.current({
         ...sel,
-        position: { x: round2(mesh.position.x), y: round2(mesh.position.y), z: round2(mesh.position.z) },
-        rotation: { x: round2(deg(mesh.rotation.x)), y: round2(deg(mesh.rotation.y)), z: round2(deg(mesh.rotation.z)) },
-        scale: { x: round2(mesh.scaling.x), y: round2(mesh.scaling.y), z: round2(mesh.scaling.z) }
+        position: {
+          x: round2(mesh.position.x),
+          y: round2(mesh.position.y),
+          z: round2(mesh.position.z)
+        },
+        rotation: {
+          x: round2(deg(mesh.rotation.x)),
+          y: round2(deg(mesh.rotation.y)),
+          z: round2(deg(mesh.rotation.z))
+        },
+        scale: {
+          x: round2(mesh.scaling.x),
+          y: round2(mesh.scaling.y),
+          z: round2(mesh.scaling.z)
+        }
       })
     }
-    gizmoManager.positionGizmo.onDragEndObservable.add(commitTransform)
-    gizmoManager.rotationGizmo.onDragEndObservable.add(commitTransform)
-    gizmoManager.scaleGizmo.onDragEndObservable.add(commitTransform)
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return
@@ -147,7 +157,7 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
           const playerMesh = meshesRef.current.get(playerObj.id)
           if (playerMesh) {
             const keys = keysRef.current
-            const fwd = camera.getForwardRay().direction.clone()
+            const fwd = camera.getForwardRay(100, camera.getWorldMatrix(), camera.position).direction.clone()
             fwd.y = 0
             if (fwd.lengthSquared() > 0.0001) fwd.normalize()
             const right = Vector3.Cross(fwd, Vector3.Up())
@@ -258,7 +268,8 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
 
   useEffect(() => {
     const gm = gizmoRef.current
-    if (!gm) return
+    const scene = sceneRef.current
+    if (!gm || !scene) return
 
     if (isPlaying || !selectedObject) {
       gm.attachToMesh(null)
@@ -269,10 +280,79 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
     if (!mesh) return
 
     gm.attachToMesh(mesh)
-    gm.positionGizmo.enabled = gizmoMode === 'position'
-    gm.rotationGizmo.enabled = gizmoMode === 'rotation'
-    gm.scaleGizmo.enabled = gizmoMode === 'scale'
-  }, [selectedObject, isPlaying, gizmoMode, objects])
+
+    const needPosition = gizmoMode === 'position'
+    const needRotation = gizmoMode === 'rotation'
+    const needScale = gizmoMode === 'scale'
+
+    const posChanged = gm.positionGizmoEnabled !== needPosition
+    const rotChanged = gm.rotationGizmoEnabled !== needRotation
+    const scaleChanged = gm.scaleGizmoEnabled !== needScale
+
+    if (posChanged || rotChanged || scaleChanged || currentGizmoModeRef.current !== gizmoMode) {
+      gm.positionGizmoEnabled = needPosition
+      gm.rotationGizmoEnabled = needRotation
+      gm.scaleGizmoEnabled = needScale
+      currentGizmoModeRef.current = gizmoMode
+
+      if (needPosition && gm.gizmos?.positionGizmo) {
+        const pg = gm.gizmos.positionGizmo
+        pg.onDragEndObservable.clear()
+        pg.onDragEndObservable.add(() => {
+          const sel = selectedRef.current
+          if (!sel) return
+          const m = meshesRef.current.get(sel.id)
+          if (!m) return
+          onUpdateRef.current({
+            ...sel,
+            position: {
+              x: round2(m.position.x),
+              y: round2(m.position.y),
+              z: round2(m.position.z)
+            }
+          })
+        })
+      }
+
+      if (needRotation && gm.gizmos?.rotationGizmo) {
+        const rg = gm.gizmos.rotationGizmo
+        rg.onDragEndObservable.clear()
+        rg.onDragEndObservable.add(() => {
+          const sel = selectedRef.current
+          if (!sel) return
+          const m = meshesRef.current.get(sel.id)
+          if (!m) return
+          onUpdateRef.current({
+            ...sel,
+            rotation: {
+              x: round2(deg(m.rotation.x)),
+              y: round2(deg(m.rotation.y)),
+              z: round2(deg(m.rotation.z))
+            }
+          })
+        })
+      }
+
+      if (needScale && gm.gizmos?.scaleGizmo) {
+        const sg = gm.gizmos.scaleGizmo
+        sg.onDragEndObservable.clear()
+        sg.onDragEndObservable.add(() => {
+          const sel = selectedRef.current
+          if (!sel) return
+          const m = meshesRef.current.get(sel.id)
+          if (!m) return
+          onUpdateRef.current({
+            ...sel,
+            scale: {
+              x: round2(m.scaling.x),
+              y: round2(m.scaling.y),
+              z: round2(m.scaling.z)
+            }
+          })
+        })
+      }
+    }
+  }, [selectedObject, isPlaying, gizmoMode])
 
   return (
     <canvas
