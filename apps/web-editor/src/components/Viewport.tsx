@@ -5,9 +5,11 @@ import {
   ArcRotateCamera,
   Vector3,
   HemisphericLight,
+  DirectionalLight,
   MeshBuilder,
   StandardMaterial,
   Color3,
+  Color4,
   ActionManager,
   ExecuteCodeAction,
   Mesh
@@ -18,14 +20,19 @@ interface ViewportProps {
   objects: SceneObject[]
   selectedObject: SceneObject | null
   onSelect: (obj: SceneObject) => void
+  isPlaying: boolean
 }
 
-export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
+const rad = (deg: number) => (deg * Math.PI) / 180
+
+export function Viewport({ objects, selectedObject, onSelect, isPlaying }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<Scene | null>(null)
   const meshesRef = useRef<Map<string, Mesh>>(new Map())
   const objectsRef = useRef<SceneObject[]>(objects)
   const onSelectRef = useRef(onSelect)
+  const isPlayingRef = useRef(isPlaying)
+  const playStartRef = useRef(0)
 
   useEffect(() => {
     objectsRef.current = objects
@@ -36,30 +43,62 @@ export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
   }, [onSelect])
 
   useEffect(() => {
+    isPlayingRef.current = isPlaying
+    if (isPlaying) {
+      playStartRef.current = performance.now()
+    } else {
+      objectsRef.current.forEach((obj) => {
+        const mesh = meshesRef.current.get(obj.id)
+        if (!mesh) return
+        mesh.position.set(obj.position.x, obj.position.y, obj.position.z)
+        mesh.rotation.set(rad(obj.rotation.x), rad(obj.rotation.y), rad(obj.rotation.z))
+      })
+    }
+  }, [isPlaying])
+
+  useEffect(() => {
     if (!canvasRef.current) return
 
     const engine = new Engine(canvasRef.current, true)
     const scene = new Scene(engine)
+    scene.clearColor = new Color4(0.07, 0.07, 0.12, 1)
 
     const camera = new ArcRotateCamera(
       'camera',
       Math.PI / 2,
       Math.PI / 3,
-      10,
-      Vector3.Zero(),
+      12,
+      new Vector3(0, 0.5, 0),
       scene
     )
     camera.attachControl(canvasRef.current, true)
+    camera.wheelPrecision = 20
 
-    const light = new HemisphericLight('light', Vector3.Up(), scene)
-    light.intensity = 0.7
+    const hemi = new HemisphericLight('hemi', Vector3.Up(), scene)
+    hemi.intensity = 0.5
 
-    const ground = MeshBuilder.CreateGround('ground', { width: 20, height: 20 }, scene)
+    const sun = new DirectionalLight('sun', new Vector3(-1, -2, -1), scene)
+    sun.intensity = 0.8
+
+    const ground = MeshBuilder.CreateGround('ground', { width: 30, height: 30 }, scene)
     const groundMaterial = new StandardMaterial('groundMaterial', scene)
-    groundMaterial.diffuseColor = new Color3(0.3, 0.3, 0.3)
+    groundMaterial.diffuseColor = new Color3(0.25, 0.28, 0.25)
     ground.material = groundMaterial
 
-    engine.runRenderLoop(() => scene.render())
+    engine.runRenderLoop(() => {
+      if (isPlayingRef.current) {
+        const t = (performance.now() - playStartRef.current) / 1000
+        objectsRef.current.forEach((obj) => {
+          const mesh = meshesRef.current.get(obj.id)
+          if (!mesh) return
+          const b = obj.behaviors
+          if (b?.spin) mesh.rotation.y += 0.03
+          if (b?.bounce) mesh.position.y = obj.position.y + Math.abs(Math.sin(t * 3)) * 1.5
+          if (b?.patrol) mesh.position.x = obj.position.x + Math.sin(t * 1.5) * 2
+        })
+      }
+      scene.render()
+    })
 
     const handleResize = () => engine.resize()
     window.addEventListener('resize', handleResize)
@@ -121,13 +160,9 @@ export function Viewport({ objects, selectedObject, onSelect }: ViewportProps) {
         meshesRef.current.set(obj.id, mesh)
       }
 
-      mesh.position = new Vector3(obj.position.x, obj.position.y, obj.position.z)
-      mesh.rotation = new Vector3(
-        (obj.rotation.x * Math.PI) / 180,
-        (obj.rotation.y * Math.PI) / 180,
-        (obj.rotation.z * Math.PI) / 180
-      )
-      mesh.scaling = new Vector3(obj.scale.x, obj.scale.y, obj.scale.z)
+      mesh.position.set(obj.position.x, obj.position.y, obj.position.z)
+      mesh.rotation.set(rad(obj.rotation.x), rad(obj.rotation.y), rad(obj.rotation.z))
+      mesh.scaling.set(obj.scale.x, obj.scale.y, obj.scale.z)
 
       const mat = mesh.material as StandardMaterial
       if (selectedObject?.id === obj.id) {
