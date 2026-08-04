@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Viewport } from './Viewport'
 import { SceneHierarchy } from './SceneHierarchy'
 import { Inspector } from './Inspector'
-import { Toolbar } from './Toolbar'
+import { Toolbar, GizmoMode } from './Toolbar'
 
 export interface Vector3D {
   x: number
@@ -10,10 +10,17 @@ export interface Vector3D {
   z: number
 }
 
+export interface ColorRGB {
+  r: number
+  g: number
+  b: number
+}
+
 export interface ObjectBehaviors {
   spin: boolean
   bounce: boolean
   patrol: boolean
+  player: boolean
 }
 
 export interface SceneObject {
@@ -23,6 +30,7 @@ export interface SceneObject {
   position: Vector3D
   rotation: Vector3D
   scale: Vector3D
+  color: ColorRGB
   behaviors: ObjectBehaviors
 }
 
@@ -44,6 +52,7 @@ export function Editor() {
   const [objects, setObjects] = useState<SceneObject[]>(loadSavedScene)
   const [selectedObject, setSelectedObject] = useState<SceneObject | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [gizmoMode, setGizmoMode] = useState<GizmoMode>('position')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -61,7 +70,8 @@ export function Editor() {
       position: { x: (index % 5) * 2 - 4, y: yOffset, z: Math.floor(index / 5) * 2 },
       rotation: { x: 0, y: 0, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
-      behaviors: { spin: false, bounce: false, patrol: false }
+      color: { r: 0.2, g: 0.5, b: 0.8 },
+      behaviors: { spin: false, bounce: false, patrol: false, player: false }
     }
     setObjects([...objects, newObject])
     setSelectedObject(newObject)
@@ -119,6 +129,8 @@ export function Editor() {
         onTogglePlay={() => setIsPlaying(!isPlaying)}
         onSave={saveToFile}
         onLoadClick={() => fileInputRef.current?.click()}
+        gizmoMode={gizmoMode}
+        onGizmoMode={setGizmoMode}
       />
 
       <input
@@ -161,7 +173,9 @@ export function Editor() {
             objects={objects}
             selectedObject={selectedObject}
             onSelect={setSelectedObject}
+            onUpdate={updateObject}
             isPlaying={isPlaying}
+            gizmoMode={gizmoMode}
           />
         </div>
 
