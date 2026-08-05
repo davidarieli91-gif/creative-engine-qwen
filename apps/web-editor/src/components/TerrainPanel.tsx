@@ -14,6 +14,7 @@ interface TerrainPanelProps {
   onPaintId: (n: number) => void
   onCreate: (w: number) => void
   onHills: () => void
+  onBiomes: () => void
   onScatter: (kind: 'trees' | 'rocks') => void
   onDelete: () => void
 }
@@ -21,7 +22,7 @@ interface TerrainPanelProps {
 const paintNames = ['🌿 Трава', '🪨 Камень', '🏖 Песок', '❄ Снег', '🟤 Земля']
 
 export function TerrainPanel(props: TerrainPanelProps) {
-  const [w, setW] = useState(64)
+  const [w, setW] = useState(128)
 
   const toolBtn = (t: TerrainTool, label: string) => (
     <button
@@ -36,15 +37,18 @@ export function TerrainPanel(props: TerrainPanelProps) {
   if (!props.terrain) {
     return (
       <div style={{ padding: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>⛏ Воксельный ландшафт:</span>
-        <select className="property-input" style={{ width: 170 }} value={w} onChange={(e) => setW(parseInt(e.target.value))}>
-          <option value={64}>Мир 64×64 (быстрый)</option>
-          <option value={96}>Мир 96×96 (детальный)</option>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>⛏ Воксельный мир:</span>
+        <select className="property-input" style={{ width: 210 }} value={w} onChange={(e) => setW(parseInt(e.target.value))}>
+          <option value={128}>128×128 — быстрый</option>
+          <option value={256}>256×256 — большой</option>
+          <option value={512}>512×512 — ГИГАНТ (×100)</option>
         </select>
         <button className="btn" style={{ background: '#16825d' }} onClick={() => props.onCreate(w)}>
-          ⛰ Создать остров
+          ⛰ Создать мир
         </button>
-        <span style={{ color: '#888', fontSize: 12 }}>Настоящее 3D: копай, строй, крась — видно с любой стороны!</span>
+        <span style={{ color: '#888', fontSize: 12 }}>
+          Чанковая система: огромные миры не тормозят! Для 512 используй 💾 Save в файл.
+        </span>
       </div>
     )
   }
@@ -59,7 +63,8 @@ export function TerrainPanel(props: TerrainPanelProps) {
         {toolBtn('paint', '🎨 Краска')}
         <span style={{ flex: 1 }} />
         <button className="btn" onClick={props.onHills}>🎲 Горы</button>
-        <button className="btn" onClick={() => props.onScatter('trees')}>🌲 Деревья</button>
+        <button className="btn" style={{ background: '#6a3ea1' }} onClick={props.onBiomes}>🎨 Биомы</button>
+        <button className="btn" onClick={() => props.onScatter('trees')}>🌲 Лес</button>
         <button className="btn" onClick={() => props.onScatter('rocks')}>🪨 Камни</button>
         <button className="btn btn-danger" onClick={props.onDelete}>🗑</button>
       </div>
@@ -88,7 +93,7 @@ export function TerrainPanel(props: TerrainPanelProps) {
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 12 }}>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           Кисть
-          <input type="range" min={1} max={10} step={0.5} value={props.radius}
+          <input type="range" min={1} max={12} step={0.5} value={props.radius}
             onChange={(e) => props.onRadius(parseFloat(e.target.value))} />
           {props.radius}
         </label>
