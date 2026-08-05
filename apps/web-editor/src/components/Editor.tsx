@@ -4,7 +4,9 @@ import { SceneHierarchy } from './SceneHierarchy'
 import { Inspector } from './Inspector'
 import { Toolbar, GizmoMode } from './Toolbar'
 import { LogicEditor } from './LogicEditor'
+import { Wizard } from './Wizard'
 import { LogicData } from '../logic'
+import { WizardConfig, generateProject } from '../wizard'
 
 export interface Vector3D {
   x: number
@@ -72,6 +74,7 @@ export function Editor() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('position')
   const [logicOpen, setLogicOpen] = useState(false)
+  const [wizardOpen, setWizardOpen] = useState(initialRef.current.objects.length === 0)
   const [hud, setHud] = useState({ score: 0, message: '' })
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -84,6 +87,16 @@ export function Editor() {
     const t = setTimeout(() => setHud((h) => ({ ...h, message: '' })), 2500)
     return () => clearTimeout(t)
   }, [hud.message])
+
+  const handleWizardCreate = (cfg: WizardConfig) => {
+    if (objects.length > 0 && !window.confirm('Заменить текущий проект новым?')) return
+    const project = generateProject(cfg)
+    setObjects(project.objects as SceneObject[])
+    setLogic(project.logic)
+    setSelectedObject(null)
+    setHud({ score: 0, message: '' })
+    setWizardOpen(false)
+  }
 
   const addObject = (type: SceneObject['type']) => {
     if (isPlaying) return
@@ -161,6 +174,7 @@ export function Editor() {
         onTogglePlay={togglePlay}
         onSave={saveToFile}
         onLoadClick={() => fileInputRef.current?.click()}
+        onNew={() => setWizardOpen(true)}
         gizmoMode={gizmoMode}
         onGizmoMode={setGizmoMode}
       />
@@ -290,6 +304,8 @@ export function Editor() {
           <LogicEditor logic={logic} objects={objects} onChange={setLogic} />
         </div>
       )}
+
+      <Wizard open={wizardOpen} onCreate={handleWizardCreate} onClose={() => setWizardOpen(false)} />
     </div>
   )
 }
