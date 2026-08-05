@@ -13,6 +13,7 @@ interface ToolbarProps {
   onSave: () => void
   onLoadClick: () => void
   onNew: () => void
+  onExport: () => void
   gizmoMode: GizmoMode
   onGizmoMode: (mode: GizmoMode) => void
 }
@@ -28,6 +29,7 @@ export function Toolbar({
   onSave,
   onLoadClick,
   onNew,
+  onExport,
   gizmoMode,
   onGizmoMode
 }: ToolbarProps) {
@@ -64,12 +66,13 @@ export function Toolbar({
 
       {gizmoButton('position', '✥ Move', 'Двигать объект мышкой')}
       {gizmoButton('rotation', '↻ Rotate', 'Вращать объект мышкой')}
-      {gizmoButton('scale', ' Scale', 'Масштабировать объект мышкой')}
+      {gizmoButton('scale', '⤢ Scale', 'Масштабировать объект мышкой')}
 
       <span style={{ width: 1, background: '#3e3e42', margin: '0 4px' }} />
 
       <button className="btn" style={dimmed} onClick={onSave}>💾 Save</button>
       <button className="btn" style={dimmed} onClick={onLoadClick}>📂 Load</button>
+      <button className="btn" style={{ ...dimmed, background: '#6a3ea1' }} onClick={onExport}>📦 Export</button>
 
       <button
         className="btn"
