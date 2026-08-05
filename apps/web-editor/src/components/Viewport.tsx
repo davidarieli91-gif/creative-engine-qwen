@@ -14,6 +14,7 @@ import {
   ExecuteCodeAction,
   GizmoManager,
   Quaternion,
+  PointerEventTypes,
   Mesh
 } from '@babylonjs/core'
 import { SceneObject } from './Editor'
@@ -74,6 +75,7 @@ export function Viewport(props: ViewportProps) {
   const cameraRef = useRef<ArcRotateCamera | null>(null)
   const gizmoRef = useRef<GizmoManager | null>(null)
   const groundRef = useRef<Mesh | null>(null)
+  const pointersInputRef = useRef<any>(null)
   const meshesRef = useRef<Map<string, Mesh>>(new Map())
   const terrainWorkRef = useRef<TerrainWork | null>(null)
   const objectsRef = useRef<SceneObject[]>(objects)
@@ -112,8 +114,20 @@ export function Viewport(props: ViewportProps) {
 
   useEffect(() => {
     const cam = cameraRef.current
-    if (cam && cam.inputs && (cam.inputs as any).attached && (cam.inputs as any).attached.mouse) {
-      ;(cam.inputs as any).attached.mouse.buttons = props.terrainTool ? [2] : [0]
+    if (!cam) return
+    try {
+      const attached: any = (cam.inputs as any).attached
+      if (props.terrainTool) {
+        if (attached && attached.pointers) {
+          pointersInputRef.current = attached.pointers
+          cam.inputs.remove(attached.pointers)
+        }
+      } else if (pointersInputRef.current) {
+        cam.inputs.add(pointersInputRef.current)
+        pointersInputRef.current = null
+      }
+    } catch {
+      // игнорируем ошибки управления камерой
     }
   }, [props.terrainTool])
 
@@ -240,54 +254,32 @@ export function Viewport(props: ViewportProps) {
     let sculpting = false
     let flattenY = 0
 
-    const doPick = (e: PointerEvent) => {
-      const canvas = canvasRef.current
-      const sc = sceneRef.current
-      const w = terrainWorkRef.current
-      if (!canvas || !sc || !w) return null
-      const rect = canvas.getBoundingClientRect()
-      const pick = sc.pick(e.clientX - rect.left, e.clientY - rect.top)
-      if (!pick || !pick.hit || !pick.pickedMesh || pick.pickedMesh.id !== w.id) return null
-      return pick.pickedPoint
-    }
-
     const sculptAt = (p: Vector3) => {
       const w = terrainWorkRef.current
       const tool = toolRef.current
       if (!w || !tool) return
-      applyBrush(
-        w.heights,
-        w.colors,
-        w.sub,
-        w.size,
-        p.x,
-        p.z,
-        radiusRef.current,
-        tool === 'raise' || tool === 'lower' ? strengthRef.current * 0.3 : strengthRef.current,
-        tool,
-        Color3.FromHexString(paintRef.current),
-        flattenY
-      )
-      const mesh = meshesRef.current.get(w.id)
-      if (mesh) updateTerrainMesh(mesh, w.sub, w.size, w.heights, w.colors)
+      try {
+        applyBrush(
+          w.heights,
+          w.colors,
+          w.sub,
+          w.size,
+          p.x,
+          p.z,
+          radiusRef.current,
+          tool === 'raise' || tool === 'lower' ? strengthRef.current * 0.3 : strengthRef.current,
+          tool,
+          Color3.FromHexString(paintRef.current),
+          flattenY
+        )
+        const mesh = meshesRef.current.get(w.id)
+        if (mesh) updateTerrainMesh(mesh, w.sub, w.size, w.heights, w.colors)
+      } catch (err) {
+        console.error('sculpt error', err)
+      }
     }
 
-    const onPointerDown = (e: PointerEvent) => {
-      if (!toolRef.current || isPlayingRef.current || e.button !== 0) return
-      const p = doPick(e)
-      if (!p) return
-      sculpting = true
-      flattenY = p.y
-      sculptAt(p)
-    }
-    const onPointerMove = (e: PointerEvent) => {
-      if (!sculpting) return
-      const p = doPick(e)
-      if (p) sculptAt(p)
-    }
-    const onPointerUp = () => {
-      if (!sculpting) return
-      sculpting = false
+    const commit = () => {
       const w = terrainWorkRef.current
       if (w) {
         commitTerrainRef.current(
@@ -296,9 +288,40 @@ export function Viewport(props: ViewportProps) {
         )
       }
     }
-    canvasRef.current.addEventListener('pointerdown', onPointerDown)
-    window.addEventListener('pointermove', onPointerMove)
-    window.addEventListener('pointerup', onPointerUp)
+
+    const pointerObserver = scene.onPointerObservable.add((info) => {
+      const tool = toolRef.current
+      if (!tool || isPlayingRef.current) return
+      const w = terrainWorkRef.current
+      if (!w) return
+      const terrainMesh = meshesRef.current.get(w.id)
+      if (!terrainMesh) return
+      const pick = info.pickInfo
+      if (!pick || !pick.hit || !pick.pickedPoint) return
+      if (pick.pickedMesh !== terrainMesh) return
+
+      if (info.type === PointerEventTypes.POINTERDOWN) {
+        if ((info.event as PointerEvent).button !== 0) return
+        sculpting = true
+        flattenY = pick.pickedPoint.y
+        sculptAt(pick.pickedPoint)
+      } else if (info.type === PointerEventTypes.POINTERMOVE) {
+        if (sculpting) sculptAt(pick.pickedPoint)
+      } else if (info.type === PointerEventTypes.POINTERUP) {
+        if (sculpting) {
+          sculpting = false
+          commit()
+        }
+      }
+    })
+
+    const onWindowPointerUp = () => {
+      if (sculpting) {
+        sculpting = false
+        commit()
+      }
+    }
+    window.addEventListener('pointerup', onWindowPointerUp)
 
     const resizeObserver = new ResizeObserver(() => engine.resize())
     if (canvasRef.current.parentElement) resizeObserver.observe(canvasRef.current.parentElement)
@@ -400,9 +423,8 @@ export function Viewport(props: ViewportProps) {
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('pointermove', onPointerMove)
-      window.removeEventListener('pointerup', onPointerUp)
-      canvasRef.current?.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointerup', onWindowPointerUp)
+      scene.onPointerObservable.remove(pointerObserver)
       resizeObserver.disconnect()
       gizmoManager.dispose()
       engine.dispose()
