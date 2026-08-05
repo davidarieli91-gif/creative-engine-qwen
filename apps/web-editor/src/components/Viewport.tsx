@@ -158,6 +158,7 @@ export function Viewport(props: ViewportProps) {
   const cameraRef = useRef<ArcRotateCamera | null>(null)
   const gizmoRef = useRef<GizmoManager | null>(null)
   const groundRef = useRef<Mesh | null>(null)
+  const cursorRef = useRef<Mesh | null>(null)
   const pointersInputRef = useRef<any>(null)
   const meshesRef = useRef<Map<string, Mesh>>(new Map())
   const terrainWorkRef = useRef<TerrainWork | null>(null)
@@ -200,6 +201,10 @@ export function Viewport(props: ViewportProps) {
   useEffect(() => { strengthRef.current = props.brushStrength }, [props.brushStrength])
   useEffect(() => { paintRef.current = props.paintId }, [props.paintId])
   useEffect(() => { commitTerrainRef.current = props.onCommitTerrain }, [props.onCommitTerrain])
+
+  useEffect(() => {
+    if (cursorRef.current) cursorRef.current.setEnabled(!!props.terrainTool && !isPlaying)
+  }, [props.terrainTool, isPlaying])
 
   useEffect(() => {
     const cam = cameraRef.current
@@ -325,6 +330,15 @@ export function Viewport(props: ViewportProps) {
     ground.material = groundMaterial
     groundRef.current = ground
 
+    const cursor = MeshBuilder.CreateSphere('brushCursor', { diameter: 1 }, scene)
+    const cursorMat = new StandardMaterial('cursorMat', scene)
+    cursorMat.emissiveColor = new Color3(1, 0.8, 0.1)
+    cursorMat.alpha = 0.5
+    cursor.material = cursorMat
+    cursor.isPickable = false
+    cursor.setEnabled(false)
+    cursorRef.current = cursor
+
     const gizmoManager = new GizmoManager(scene)
     gizmoManager.boundingBoxGizmoEnabled = false
     gizmoManager.usePointerToAttachGizmos = false
@@ -357,17 +371,55 @@ export function Viewport(props: ViewportProps) {
       if (old) old.dispose()
     }
 
-    const raycastTerrain = (clientX: number, clientY: number): VoxelHit | null => {
+    const voxelCenter = (w: TerrainWork, hx: number, hy: number, hz: number) =>
+      new Vector3((hx + 0.5 - w.w / 2) * w.size, (hy + 0.5) * w.size, (hz + 0.5 - w.d / 2) * w.size)
+
+    const getHit = (clientX: number, clientY: number): VoxelHit | null => {
       const canvas = canvasRef.current
       const sc = sceneRef.current
       const w = terrainWorkRef.current
       if (!canvas || !sc || !w) return null
       const rect = canvas.getBoundingClientRect()
-      const ray = sc.createPickingRay(clientX - rect.left, clientY - rect.top)
-      return raycastVoxels(
-        w.vox, w.w, w.h, w.d, w.size,
-        ray.origin, ray.direction, 400
-      )
+      const cx = clientX - rect.left
+      const cy = clientY - rect.top
+
+      const ray = sc.createPickingRay(cx, cy)
+      const dda = raycastVoxels(w.vox, w.w, w.h, w.d, w.size, ray.origin, ray.direction, 400)
+      if (dda) return dda
+
+      const pick = sc.pick(cx, cy)
+      if (pick && pick.hit && pick.pickedPoint && pick.pickedMesh === meshesRef.current.get(w.id)) {
+        const p = pick.pickedPoint
+        let n = new Vector3(0, 1, 0)
+        try {
+          const gn = pick.getNormal(true)
+          if (gn) n = gn
+        } catch {
+          // ignore
+        }
+        const ix = Math.floor((p.x - n.x * 0.01) / w.size + w.w / 2)
+        const iy = Math.floor((p.y - n.y * 0.01) / w.size)
+        const iz = Math.floor((p.z - n.z * 0.01) / w.size + w.d / 2)
+        return {
+          x: ix, y: iy, z: iz,
+          nx: Math.round(n.x), ny: Math.round(n.y), nz: Math.round(n.z)
+        }
+      }
+      return null
+    }
+
+    const updateCursor = (hit: VoxelHit | null) => {
+      const c = cursorRef.current
+      const w = terrainWorkRef.current
+      if (!c || !w) return
+      if (!hit || !toolRef.current || isPlayingRef.current) {
+        c.setEnabled(false)
+        return
+      }
+      c.setEnabled(true)
+      c.position = voxelCenter(w, hit.x, hit.y, hit.z)
+      const s = radiusRef.current * 2
+      c.scaling.set(s, s, s)
     }
 
     const sculptHit = (hit: VoxelHit) => {
@@ -406,16 +458,18 @@ export function Viewport(props: ViewportProps) {
     const onPointerDown = (e: PointerEvent) => {
       if (!toolRef.current || isPlayingRef.current || e.button !== 0) return
       if (!terrainWorkRef.current) return
-      const hit = raycastTerrain(e.clientX, e.clientY)
+      const hit = getHit(e.clientX, e.clientY)
+      console.log('[tool] down', toolRef.current, hit)
       if (!hit) return
       sculpting = true
       sculptHit(hit)
     }
 
     const onPointerMove = (e: PointerEvent) => {
-      if (!sculpting) return
-      const hit = raycastTerrain(e.clientX, e.clientY)
-      if (hit) sculptHit(hit)
+      if (!toolRef.current || isPlayingRef.current) return
+      const hit = getHit(e.clientX, e.clientY)
+      updateCursor(hit)
+      if (sculpting && hit) sculptHit(hit)
     }
 
     const onPointerUp = () => {
@@ -424,12 +478,13 @@ export function Viewport(props: ViewportProps) {
       const w = terrainWorkRef.current
       if (w) {
         remeshTerrain()
+        console.log('[tool] commit')
         commitTerrainRef.current(bytesToB64(w.vox), bytesToB64(w.mat))
       }
     }
 
     canvasRef.current.addEventListener('pointerdown', onPointerDown)
-    window.addEventListener('pointermove', onPointerMove)
+    canvasRef.current.addEventListener('pointermove', onPointerMove)
     window.addEventListener('pointerup', onPointerUp)
 
     const resizeObserver = new ResizeObserver(() => engine.resize())
@@ -577,9 +632,9 @@ export function Viewport(props: ViewportProps) {
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('pointerup', onPointerUp)
       canvasRef.current?.removeEventListener('pointerdown', onPointerDown)
+      canvasRef.current?.removeEventListener('pointermove', onPointerMove)
       resizeObserver.disconnect()
       gizmoManager.dispose()
       engine.dispose()
@@ -587,6 +642,7 @@ export function Viewport(props: ViewportProps) {
       cameraRef.current = null
       gizmoRef.current = null
       groundRef.current = null
+      cursorRef.current = null
       terrainWorkRef.current = null
       waterWorkRef.current = null
       meshesRef.current.clear()
