@@ -39,7 +39,8 @@ export const ACTION_TYPES: Record<string, string> = {
   delete: '🗑 Delete object',
   color: '🎨 Recolor object',
   sink: '🕳 Sink object',
-  float: '🌊 Float object'
+  float: '🌊 Float object',
+  sound: '🔊 Play sound'
 }
 
 export function buildChains(logic: LogicData) {
