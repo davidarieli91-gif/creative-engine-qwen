@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Viewport } from './Viewport'
 import { SceneHierarchy } from './SceneHierarchy'
+import { ScenePanel } from './ScenePanel'
 import { Inspector } from './Inspector'
 import { Toolbar, GizmoMode } from './Toolbar'
 import { LogicEditor } from './LogicEditor'
@@ -391,7 +392,7 @@ export function Editor() {
           </div>
           {!leftPanelCollapsed && (
             <div className="panel-content">
-              <SceneHierarchy objects={objects} selectedObject={selectedObject} onSelect={setSelectedObject} />
+              <ScenePanel objects={objects} onObjectsChange={setObjects} selectedObject={selectedObject} onSelect={setSelectedObject} />
             </div>
           )}
         </div>
