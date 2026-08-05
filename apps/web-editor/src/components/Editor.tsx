@@ -11,24 +11,17 @@ import { WizardConfig, generateProject } from '../wizard'
 import { exportGameHtml } from '../exporter'
 import {
   TerrainTool,
-  makeHeights,
-  makeColors,
-  generateHills,
-  sampleHeight
+  VoxelTerrainData,
+  createVoxelField,
+  generateVoxelHills,
+  bytesToB64,
+  b64ToBytes,
+  topHeightAt,
+  heightmapToVoxels
 } from '../terrain'
 
-export interface Vector3D {
-  x: number
-  y: number
-  z: number
-}
-
-export interface ColorRGB {
-  r: number
-  g: number
-  b: number
-}
-
+export interface Vector3D { x: number; y: number; z: number }
+export interface ColorRGB { r: number; g: number; b: number }
 export interface ObjectBehaviors {
   spin: boolean
   bounce: boolean
@@ -36,14 +29,6 @@ export interface ObjectBehaviors {
   player: boolean
   float: boolean
 }
-
-export interface TerrainObjectData {
-  sub: number
-  size: number
-  heights: number[]
-  colors: number[]
-}
-
 export interface WaterObjectData {
   level: number
   size: number
@@ -51,7 +36,6 @@ export interface WaterObjectData {
   waveSpeed: number
   color: string
 }
-
 export interface SceneObject {
   id: string
   name: string
@@ -61,14 +45,11 @@ export interface SceneObject {
   scale: Vector3D
   color: ColorRGB
   behaviors: ObjectBehaviors
-  terrain?: TerrainObjectData
+  terrain?: any
   water?: WaterObjectData
 }
 
-interface SavedProject {
-  objects: SceneObject[]
-  logic: LogicData
-}
+interface SavedProject { objects: SceneObject[]; logic: LogicData }
 
 const STORAGE_KEY = 'creative-engine-qwen-scene'
 const round2 = (v: number) => Math.round(v * 100) / 100
@@ -82,14 +63,23 @@ function hexToRgb(h: string): ColorRGB {
   }
 }
 
+function migrate(list: SceneObject[]): SceneObject[] {
+  return list.map((o) => {
+    if (o.type === 'terrain' && o.terrain && !o.terrain.voxels) {
+      return { ...o, terrain: heightmapToVoxels(o.terrain) }
+    }
+    return o
+  })
+}
+
 function loadSavedProject(): SavedProject {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) return { objects: parsed, logic: { nodes: [], edges: [] } }
+      if (Array.isArray(parsed)) return { objects: migrate(parsed), logic: { nodes: [], edges: [] } }
       return {
-        objects: parsed.objects ?? [],
+        objects: migrate(parsed.objects ?? []),
         logic: parsed.logic ?? { nodes: [], edges: [] }
       }
     }
@@ -116,9 +106,9 @@ export function Editor() {
   const [wizardOpen, setWizardOpen] = useState(initialRef.current.objects.length === 0)
   const [hud, setHud] = useState({ score: 0, message: '' })
   const [terrainTool, setTerrainTool] = useState<TerrainTool>('raise')
-  const [brushRadius, setBrushRadius] = useState(4)
-  const [brushStrength, setBrushStrength] = useState(0.4)
-  const [paintColor, setPaintColor] = useState('#5da345')
+  const [brushRadius, setBrushRadius] = useState(3)
+  const [brushStrength, setBrushStrength] = useState(0.5)
+  const [paintId, setPaintId] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const terrain = objects.find((o) => o.type === 'terrain') ?? null
@@ -137,7 +127,7 @@ export function Editor() {
   const handleWizardCreate = (cfg: WizardConfig) => {
     if (objects.length > 0 && !window.confirm('Заменить текущий проект новым?')) return
     const project = generateProject(cfg)
-    setObjects(project.objects as SceneObject[])
+    setObjects(migrate(project.objects as SceneObject[]))
     setLogic(project.logic)
     setSelectedObject(null)
     setHud({ score: 0, message: '' })
@@ -206,7 +196,7 @@ export function Editor() {
         const parsed = JSON.parse(String(reader.result))
         const list = Array.isArray(parsed) ? parsed : parsed.objects
         if (Array.isArray(list)) {
-          setObjects(list)
+          setObjects(migrate(list))
           setLogic(parsed.logic ?? { nodes: [], edges: [] })
           setSelectedObject(null)
         } else {
@@ -219,8 +209,11 @@ export function Editor() {
     reader.readAsText(file)
   }
 
-  const createTerrain = (sub: number, size: number) => {
+  const createTerrain = (w: number) => {
     if (isPlaying) return
+    const h = 32
+    const { vox, mat } = createVoxelField(w, h, w)
+    generateVoxelHills(vox, mat, w, h, w, 1, 6, Math.random() * 100)
     const t: SceneObject = {
       id: 'terrain_' + Date.now(),
       name: 'Terrain',
@@ -230,39 +223,39 @@ export function Editor() {
       scale: { x: 1, y: 1, z: 1 },
       color: { r: 1, g: 1, b: 1 },
       behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false },
-      terrain: {
-        sub,
-        size,
-        heights: Array.from(makeHeights(sub)),
-        colors: Array.from(makeColors(sub), round2)
-      }
+      terrain: { w, h, d: w, size: 1, voxels: bytesToB64(vox), mats: bytesToB64(mat) } as VoxelTerrainData
     }
     setObjects([...objects.filter((o) => o.type !== 'terrain'), t])
   }
 
   const genHills = () => {
     if (!terrain?.terrain || isPlaying) return
-    const { sub, size } = terrain.terrain
-    const h = Float32Array.from(terrain.terrain.heights)
-    generateHills(h, sub, size, 4, Math.random() * 100)
+    const td = terrain.terrain as VoxelTerrainData
+    const vox = b64ToBytes(td.voxels)
+    const mat = b64ToBytes(td.mats)
+    vox.fill(0)
+    mat.fill(0)
+    generateVoxelHills(vox, mat, td.w, td.h, td.d, td.size, 6, Math.random() * 100)
     const updated: SceneObject = {
       ...terrain,
-      terrain: { ...terrain.terrain, heights: Array.from(h, round2) }
+      terrain: { ...td, voxels: bytesToB64(vox), mats: bytesToB64(mat) }
     }
     setObjects(objects.map((o) => (o.id === terrain.id ? updated : o)))
   }
 
   const scatter = (kind: 'trees' | 'rocks') => {
     if (!terrain?.terrain || isPlaying) return
-    const { sub, size, heights } = terrain.terrain
-    const hf = Float32Array.from(heights)
+    const td = terrain.terrain as VoxelTerrainData
+    const vox = b64ToBytes(td.voxels)
     const add: SceneObject[] = []
     const count = kind === 'trees' ? 15 : 10
     const stamp = Date.now()
+    const half = (td.w * td.size) / 2
     for (let i = 0; i < count; i++) {
-      const x = round2((Math.random() - 0.5) * size * 0.9)
-      const z = round2((Math.random() - 0.5) * size * 0.9)
-      const y = round2(sampleHeight(hf, sub, size, x, z))
+      const x = round2((Math.random() - 0.5) * half * 1.8)
+      const z = round2((Math.random() - 0.5) * half * 1.8)
+      const y = round2(topHeightAt(vox, td.w, td.h, td.d, td.size, x, z))
+      if (y <= 0) continue
       if (kind === 'trees') {
         add.push({
           id: `${stamp}_t${i}`, name: `Tree_${i + 1}`, type: 'cylinder',
@@ -294,11 +287,11 @@ export function Editor() {
     setObjects(objects.filter((o) => o.type !== 'terrain'))
   }
 
-  const commitTerrain = (heights: number[], colors: number[]) => {
+  const commitTerrain = (voxels: string, mats: string) => {
     if (!terrain?.terrain) return
     const updated: SceneObject = {
       ...terrain,
-      terrain: { ...terrain.terrain, heights, colors }
+      terrain: { ...terrain.terrain, voxels, mats }
     }
     setObjects(objects.map((o) => (o.id === terrain.id ? updated : o)))
   }
@@ -314,7 +307,7 @@ export function Editor() {
       scale: { x: 1, y: 1, z: 1 },
       color: { r: 0.1, g: 0.3, b: 0.6 },
       behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false },
-      water: { level: 1, size: 70, waveHeight: 0.35, waveSpeed: 1.2, color: '#1e6fd8' }
+      water: { level: 2, size: 70, waveHeight: 0.35, waveSpeed: 1.2, color: '#1e6fd8' }
     }
     setObjects([...objects.filter((o) => o.type !== 'water'), w])
   }
@@ -360,10 +353,7 @@ export function Editor() {
       />
 
       <div className="editor-main">
-        <div
-          className="panel left-panel"
-          style={{ width: leftPanelCollapsed ? '40px' : '250px' }}
-        >
+        <div className="panel left-panel" style={{ width: leftPanelCollapsed ? '40px' : '250px' }}>
           <div className="panel-header" onClick={() => setLeftPanelCollapsed(!leftPanelCollapsed)}>
             <span style={{ display: leftPanelCollapsed ? 'none' : 'inline' }}>Scene</span>
             <span className={`collapse-icon ${leftPanelCollapsed ? 'collapsed' : ''}`}>▼</span>
@@ -388,7 +378,7 @@ export function Editor() {
             terrainTool={terrainOpen && terrain && !isPlaying ? terrainTool : null}
             brushRadius={brushRadius}
             brushStrength={brushStrength}
-            paintColor={paintColor}
+            paintId={paintId}
             onCommitTerrain={commitTerrain}
           />
 
@@ -449,8 +439,8 @@ export function Editor() {
             onRadius={setBrushRadius}
             strength={brushStrength}
             onStrength={setBrushStrength}
-            paintColor={paintColor}
-            onPaintColor={setPaintColor}
+            paintId={paintId}
+            onPaintId={setPaintId}
             onCreate={createTerrain}
             onHills={genHills}
             onScatter={scatter}
@@ -465,13 +455,13 @@ export function Editor() {
             <>
               <span style={{ fontWeight: 700 }}>🌊 Вода:</span>
               <button className="btn" style={{ background: '#16825d' }} onClick={createWater}>🌊 Создать воду</button>
-              <span style={{ color: '#888' }}>Море для кораблей, айсбергов и приключений!</span>
+              <span style={{ color: '#888' }}>Море с волнами для кораблей и приключений!</span>
             </>
           ) : (
             <>
               <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 Уровень
-                <input type="range" min={-2} max={8} step={0.1} value={water.water?.level ?? 1}
+                <input type="range" min={-2} max={20} step={0.5} value={water.water?.level ?? 2}
                   onChange={(e) => updateWater({ level: parseFloat(e.target.value) })} />
                 {water.water?.level}
               </label>
@@ -482,16 +472,10 @@ export function Editor() {
                 {water.water?.waveHeight}
               </label>
               <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                Скорость
+                Ветер
                 <input type="range" min={0} max={3} step={0.1} value={water.water?.waveSpeed ?? 1.2}
                   onChange={(e) => updateWater({ waveSpeed: parseFloat(e.target.value) })} />
                 {water.water?.waveSpeed}
-              </label>
-              <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                Цвет
-                <input type="color" value={water.water?.color ?? '#1e6fd8'}
-                  onChange={(e) => updateWater({ color: e.target.value })}
-                  style={{ width: 40, height: 26, background: '#1e1e1e', border: '1px solid #3e3e42', borderRadius: 4 }} />
               </label>
               <button className="btn btn-danger" onClick={deleteWater}>🗑 Удалить воду</button>
             </>
