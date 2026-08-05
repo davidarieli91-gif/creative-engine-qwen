@@ -149,7 +149,7 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
             const fwd = camera.target.subtract(camera.position)
             fwd.y = 0
             if (fwd.lengthSquared() > 0.0001) fwd.normalize()
-            const right = Vector3.Cross(fwd, Vector3.Up())
+            const right = Vector3.Cross(Vector3.Up(), fwd)
 
             const move = Vector3.Zero()
             if (keys.has('KeyW') || keys.has('ArrowUp')) move.addInPlace(fwd)
