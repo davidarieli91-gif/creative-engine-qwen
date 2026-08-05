@@ -9,8 +9,8 @@ import { SceneObject } from './Editor'
 import { GizmoMode } from './Toolbar'
 import { LogicData, LogicNode, buildChains } from '../logic'
 import {
-  TerrainTool, VoxelTerrainData, b64ToBytes, bytesToB64, buildVoxelGeometry,
-  createVoxelMesh, applyVoxelBrush, topHeightAt
+  TerrainTool, VoxelTerrainData, CHUNK, b64ToBytes, rleDecode, rleEncode,
+  buildVoxelGeometryRegion, createVoxelMesh, applyVoxelBrush, topHeightAt
 } from '../terrain'
 
 interface ViewportProps {
@@ -137,6 +137,7 @@ interface TerrainWork {
   mat: Uint8Array
   srcV: string
   srcM: string
+  chunks: Map<string, Mesh>
 }
 
 interface WaterWork {
@@ -224,6 +225,50 @@ export function Viewport(props: ViewportProps) {
       // ignore
     }
   }, [props.terrainTool])
+
+  const disposeChunks = (w: TerrainWork) => {
+    w.chunks.forEach((m) => m.dispose())
+    w.chunks.clear()
+  }
+
+  const remeshChunk = (w: TerrainWork, cx: number, cz: number) => {
+    const sc = sceneRef.current
+    if (!sc) return
+    const key = cx + '_' + cz
+    const old = w.chunks.get(key)
+    if (old) old.dispose()
+    const x0 = cx * CHUNK
+    const z0 = cz * CHUNK
+    const x1 = Math.min(w.w, x0 + CHUNK)
+    const z1 = Math.min(w.d, z0 + CHUNK)
+    const geo = buildVoxelGeometryRegion(w.vox, w.mat, w.w, w.h, w.d, w.size, x0, z0, x1, z1)
+    if (geo.indices.length === 0) {
+      w.chunks.delete(key)
+      return
+    }
+    const mesh = createVoxelMesh(sc, w.id + '_c' + key, geo)
+    mesh.isPickable = true
+    w.chunks.set(key, mesh)
+  }
+
+  const remeshAll = (w: TerrainWork) => {
+    disposeChunks(w)
+    const ncx = Math.ceil(w.w / CHUNK)
+    const ncz = Math.ceil(w.d / CHUNK)
+    for (let cz = 0; cz < ncz; cz++) {
+      for (let cx = 0; cx < ncx; cx++) remeshChunk(w, cx, cz)
+    }
+  }
+
+  const remeshRegion = (w: TerrainWork, minx: number, minz: number, maxx: number, maxz: number) => {
+    const cx0 = Math.max(0, Math.floor(minx / CHUNK))
+    const cx1 = Math.min(Math.ceil(w.w / CHUNK) - 1, Math.floor(maxx / CHUNK))
+    const cz0 = Math.max(0, Math.floor(minz / CHUNK))
+    const cz1 = Math.min(Math.ceil(w.d / CHUNK) - 1, Math.floor(maxz / CHUNK))
+    for (let cz = cz0; cz <= cz1; cz++) {
+      for (let cx = cx0; cx <= cx1; cx++) remeshChunk(w, cx, cz)
+    }
+  }
 
   const runChain = (actions: LogicNode[]) => {
     actions.forEach((node) => {
@@ -358,18 +403,6 @@ export function Viewport(props: ViewportProps) {
     window.addEventListener('keyup', onKeyUp)
 
     let sculpting = false
-    let lastRefresh = 0
-
-    const remeshTerrain = () => {
-      const w = terrainWorkRef.current
-      if (!w) return
-      const geo = buildVoxelGeometry(w.vox, w.mat, w.w, w.h, w.d, w.size)
-      const newMesh = createVoxelMesh(scene, w.id, geo)
-      newMesh.isPickable = true
-      const old = meshesRef.current.get(w.id)
-      meshesRef.current.set(w.id, newMesh)
-      if (old) old.dispose()
-    }
 
     const voxelCenter = (w: TerrainWork, hx: number, hy: number, hz: number) =>
       new Vector3((hx + 0.5 - w.w / 2) * w.size, (hy + 0.5) * w.size, (hz + 0.5 - w.d / 2) * w.size)
@@ -384,11 +417,11 @@ export function Viewport(props: ViewportProps) {
       const cy = clientY - rect.top
 
       const ray = sc.createPickingRay(cx, cy)
-      const dda = raycastVoxels(w.vox, w.w, w.h, w.d, w.size, ray.origin, ray.direction, 400)
+      const dda = raycastVoxels(w.vox, w.w, w.h, w.d, w.size, ray.origin, ray.direction, 1000)
       if (dda) return dda
 
       const pick = sc.pick(cx, cy)
-      if (pick && pick.hit && pick.pickedPoint && pick.pickedMesh === meshesRef.current.get(w.id)) {
+      if (pick && pick.hit && pick.pickedPoint && pick.pickedMesh && pick.pickedMesh.id.startsWith(w.id + '_c')) {
         const p = pick.pickedPoint
         let n = new Vector3(0, 1, 0)
         try {
@@ -445,11 +478,8 @@ export function Viewport(props: ViewportProps) {
           tool,
           paintRef.current
         )
-        const now = performance.now()
-        if (now - lastRefresh > 60) {
-          lastRefresh = now
-          remeshTerrain()
-        }
+        const r = radiusRef.current + 1
+        remeshRegion(w, px - r, pz - r, px + r, pz + r)
       } catch (err) {
         console.error('[terrain] sculpt error', err)
       }
@@ -477,9 +507,8 @@ export function Viewport(props: ViewportProps) {
       sculpting = false
       const w = terrainWorkRef.current
       if (w) {
-        remeshTerrain()
         console.log('[tool] commit')
-        commitTerrainRef.current(bytesToB64(w.vox), bytesToB64(w.mat))
+        commitTerrainRef.current(rleEncode(w.vox), rleEncode(w.mat))
       }
     }
 
@@ -643,6 +672,7 @@ export function Viewport(props: ViewportProps) {
       gizmoRef.current = null
       groundRef.current = null
       cursorRef.current = null
+      if (terrainWorkRef.current) disposeChunks(terrainWorkRef.current)
       terrainWorkRef.current = null
       waterWorkRef.current = null
       meshesRef.current.clear()
@@ -724,20 +754,19 @@ export function Viewport(props: ViewportProps) {
       const td = tObj.terrain as VoxelTerrainData
       const w0 = terrainWorkRef.current
       if (!w0 || w0.id !== tObj.id || w0.srcV !== td.voxels || w0.srcM !== td.mats) {
-        const vox = b64ToBytes(td.voxels)
-        const mat = b64ToBytes(td.mats)
-        const geo = buildVoxelGeometry(vox, mat, td.w, td.h, td.d, td.size)
-        const newMesh = createVoxelMesh(scene, tObj.id, geo)
-        newMesh.isPickable = true
-        const old = meshesRef.current.get(tObj.id)
-        meshesRef.current.set(tObj.id, newMesh)
-        if (old) old.dispose()
-        terrainWorkRef.current = {
+        if (w0) disposeChunks(w0)
+        const len = td.w * td.h * td.d
+        const vox = td.rle ? rleDecode(td.voxels, len) : b64ToBytes(td.voxels)
+        const mat = td.rle ? rleDecode(td.mats, len) : b64ToBytes(td.mats)
+        const work: TerrainWork = {
           id: tObj.id, w: td.w, h: td.h, d: td.d, size: td.size,
-          vox, mat, srcV: td.voxels, srcM: td.mats
+          vox, mat, srcV: td.voxels, srcM: td.mats, chunks: new Map()
         }
+        terrainWorkRef.current = work
+        remeshAll(work)
       }
     } else if (terrainWorkRef.current) {
+      disposeChunks(terrainWorkRef.current)
       terrainWorkRef.current = null
     }
 
