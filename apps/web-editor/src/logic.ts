@@ -37,7 +37,9 @@ export const ACTION_TYPES: Record<string, string> = {
   score: '🏆 Add to score',
   text: '💬 Show text',
   delete: '🗑 Delete object',
-  color: '🎨 Recolor object'
+  color: '🎨 Recolor object',
+  sink: '🕳 Sink object',
+  float: '🌊 Float object'
 }
 
 export function buildChains(logic: LogicData) {
