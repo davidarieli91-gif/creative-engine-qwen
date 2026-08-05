@@ -18,6 +18,7 @@ import {
 } from '@babylonjs/core'
 import { SceneObject } from './Editor'
 import { GizmoMode } from './Toolbar'
+import { LogicData, LogicNode, buildChains } from '../logic'
 
 interface ViewportProps {
   objects: SceneObject[]
@@ -26,6 +27,8 @@ interface ViewportProps {
   onUpdate: (obj: SceneObject) => void
   isPlaying: boolean
   gizmoMode: GizmoMode
+  logic: LogicData
+  onHud: (h: { score: number; message: string }) => void
 }
 
 const rad = (d: number) => (d * Math.PI) / 180
@@ -41,7 +44,7 @@ function quatToEuler(q: Quaternion): { x: number; y: number; z: number } {
   return { x: round2(deg(e.x)), y: round2(deg(e.y)), z: round2(deg(e.z)) }
 }
 
-export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlaying, gizmoMode }: ViewportProps) {
+export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlaying, gizmoMode, logic, onHud }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<Scene | null>(null)
   const cameraRef = useRef<ArcRotateCamera | null>(null)
@@ -52,9 +55,17 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
   const onSelectRef = useRef(onSelect)
   const onUpdateRef = useRef(onUpdate)
   const isPlayingRef = useRef(isPlaying)
+  const logicRef = useRef<LogicData>(logic)
+  const onHudRef = useRef(onHud)
   const keysRef = useRef<Set<string>>(new Set())
   const playStartRef = useRef(0)
+  const lastTsRef = useRef(0)
   const gizmoModeRef = useRef<GizmoMode>('position')
+  const chainsRef = useRef<{ event: LogicNode; actions: LogicNode[] }[]>([])
+  const touchFiredRef = useRef<Set<string>>(new Set())
+  const timerAccRef = useRef<Map<string, number>>(new Map())
+  const scoreRef = useRef(0)
+  const runtimeHiddenRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     objectsRef.current = objects
@@ -73,18 +84,81 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
   }, [selectedObject])
 
   useEffect(() => {
+    logicRef.current = logic
+  }, [logic])
+
+  useEffect(() => {
+    onHudRef.current = onHud
+  }, [onHud])
+
+  const runChain = (actions: LogicNode[]) => {
+    actions.forEach((node) => {
+      const d = node.data
+      switch (d.type) {
+        case 'score': {
+          scoreRef.current += typeof d.value === 'number' ? d.value : 1
+          onHudRef.current({ score: scoreRef.current, message: '' })
+          break
+        }
+        case 'text': {
+          onHudRef.current({ score: scoreRef.current, message: d.message || '...' })
+          break
+        }
+        case 'delete': {
+          if (d.objectId) {
+            const m = meshesRef.current.get(d.objectId)
+            if (m) {
+              m.setEnabled(false)
+              runtimeHiddenRef.current.add(d.objectId)
+            }
+          }
+          break
+        }
+        case 'color': {
+          if (d.objectId) {
+            const m = meshesRef.current.get(d.objectId)
+            const mat = m?.material as StandardMaterial | undefined
+            if (mat) mat.diffuseColor = Color3.FromHexString(d.color || '#ffcc00')
+          }
+          break
+        }
+      }
+    })
+  }
+  const runChainRef = useRef(runChain)
+  useEffect(() => {
+    runChainRef.current = runChain
+  })
+
+  useEffect(() => {
     isPlayingRef.current = isPlaying
     keysRef.current.clear()
     if (isPlaying) {
       playStartRef.current = performance.now()
+      lastTsRef.current = performance.now()
+      scoreRef.current = 0
+      touchFiredRef.current.clear()
+      timerAccRef.current.clear()
+      chainsRef.current = buildChains(logicRef.current)
+      chainsRef.current
+        .filter((c) => c.event.data.type === 'start')
+        .forEach((c) => runChainRef.current(c.actions))
       const active = document.activeElement as HTMLElement | null
       if (active && typeof active.blur === 'function') active.blur()
     } else {
+      runtimeHiddenRef.current.forEach((id) => {
+        const m = meshesRef.current.get(id)
+        if (m) m.setEnabled(true)
+      })
+      runtimeHiddenRef.current.clear()
       objectsRef.current.forEach((obj) => {
         const mesh = meshesRef.current.get(obj.id)
         if (!mesh) return
         mesh.position.set(obj.position.x, obj.position.y, obj.position.z)
         mesh.rotationQuaternion = eulerToQuat(obj.rotation)
+        const mat = mesh.material as StandardMaterial
+        const col = obj.color ?? { r: 0.2, g: 0.5, b: 0.8 }
+        mat.diffuseColor = new Color3(col.r, col.g, col.b)
       })
     }
   }, [isPlaying])
@@ -137,14 +211,20 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
 
+    const resizeObserver = new ResizeObserver(() => engine.resize())
+    if (canvasRef.current.parentElement) resizeObserver.observe(canvasRef.current.parentElement)
+
     engine.runRenderLoop(() => {
       if (isPlayingRef.current) {
-        const t = (performance.now() - playStartRef.current) / 1000
+        const now = performance.now()
+        const dt = Math.min(0.1, (now - lastTsRef.current) / 1000)
+        lastTsRef.current = now
+        const t = (now - playStartRef.current) / 1000
 
         const playerObj = objectsRef.current.find((o) => o.behaviors?.player)
         if (playerObj) {
           const playerMesh = meshesRef.current.get(playerObj.id)
-          if (playerMesh) {
+          if (playerMesh && playerMesh.isEnabled()) {
             const keys = keysRef.current
             const fwd = camera.target.subtract(camera.position)
             fwd.y = 0
@@ -173,11 +253,41 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
 
         objectsRef.current.forEach((obj) => {
           const mesh = meshesRef.current.get(obj.id)
-          if (!mesh) return
+          if (!mesh || !mesh.isEnabled()) return
           const b = obj.behaviors
           if (b?.spin) mesh.rotate(Vector3.Up(), 0.03)
           if (b?.bounce) mesh.position.y = obj.position.y + Math.abs(Math.sin(t * 3)) * 1.5
           if (b?.patrol && !b?.player) mesh.position.x = obj.position.x + Math.sin(t * 1.5) * 2
+        })
+
+        chainsRef.current.forEach((chain) => {
+          const ev = chain.event.data
+          if (ev.type === 'timer') {
+            const sec = Math.max(0.1, ev.seconds || 1)
+            const acc = (timerAccRef.current.get(chain.event.id) ?? 0) + dt
+            if (acc >= sec) {
+              timerAccRef.current.set(chain.event.id, 0)
+              runChainRef.current(chain.actions)
+            } else {
+              timerAccRef.current.set(chain.event.id, acc)
+            }
+          }
+          if (ev.type === 'touch' && ev.objectId) {
+            const target = meshesRef.current.get(ev.objectId)
+            const pObj = objectsRef.current.find((o) => o.behaviors?.player)
+            const player = pObj && meshesRef.current.get(pObj.id)
+            if (target && player && target.isEnabled() && player.isEnabled()) {
+              const dist = Vector3.Distance(player.position, target.position)
+              if (dist < 1.3) {
+                if (!touchFiredRef.current.has(chain.event.id)) {
+                  touchFiredRef.current.add(chain.event.id)
+                  runChainRef.current(chain.actions)
+                }
+              } else {
+                touchFiredRef.current.delete(chain.event.id)
+              }
+            }
+          }
         })
       }
       scene.render()
@@ -192,6 +302,7 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      resizeObserver.disconnect()
       gizmoManager.dispose()
       engine.dispose()
       sceneRef.current = null
@@ -240,7 +351,16 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
         mesh.actionManager.registerAction(
           new ExecuteCodeAction(ActionManager.OnPickTrigger, () => {
             const latest = objectsRef.current.find((o) => o.id === obj.id)
-            if (latest) onSelectRef.current(latest)
+            if (!latest) return
+            if (isPlayingRef.current) {
+              chainsRef.current.forEach((chain) => {
+                if (chain.event.data.type === 'click' && chain.event.data.objectId === obj.id) {
+                  runChainRef.current(chain.actions)
+                }
+              })
+            } else {
+              onSelectRef.current(latest)
+            }
           })
         )
 
@@ -272,17 +392,10 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
     if (!mesh) return
 
     gm.attachToMesh(mesh)
-
-    if (gizmoModeRef.current !== gizmoMode) {
-      gizmoModeRef.current = gizmoMode
-      gm.positionGizmoEnabled = gizmoMode === 'position'
-      gm.rotationGizmoEnabled = gizmoMode === 'rotation'
-      gm.scaleGizmoEnabled = gizmoMode === 'scale'
-    } else {
-      gm.positionGizmoEnabled = gizmoMode === 'position'
-      gm.rotationGizmoEnabled = gizmoMode === 'rotation'
-      gm.scaleGizmoEnabled = gizmoMode === 'scale'
-    }
+    gm.positionGizmoEnabled = gizmoMode === 'position'
+    gm.rotationGizmoEnabled = gizmoMode === 'rotation'
+    gm.scaleGizmoEnabled = gizmoMode === 'scale'
+    gizmoModeRef.current = gizmoMode
 
     const g = gm.gizmos
     if (gizmoMode === 'position' && g.positionGizmo) {
