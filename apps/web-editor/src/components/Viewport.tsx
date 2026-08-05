@@ -23,7 +23,6 @@ import {
   TerrainTool,
   applyBrush,
   createTerrainMesh,
-  updateTerrainMesh,
   sampleHeight
 } from '../terrain'
 
@@ -252,6 +251,17 @@ export function Viewport(props: ViewportProps) {
 
     let sculpting = false
     let flattenY = 0
+    let lastRefresh = 0
+
+    const refreshTerrain = () => {
+      const w = terrainWorkRef.current
+      if (!w) return
+      const old = meshesRef.current.get(w.id)
+      if (old) old.dispose()
+      const mesh = createTerrainMesh(scene, w.id, w.sub, w.size, w.heights, w.colors)
+      mesh.isPickable = true
+      meshesRef.current.set(w.id, mesh)
+    }
 
     const sculptAt = (p: Vector3) => {
       const w = terrainWorkRef.current
@@ -271,8 +281,11 @@ export function Viewport(props: ViewportProps) {
           Color3.FromHexString(paintRef.current),
           flattenY
         )
-        const mesh = meshesRef.current.get(w.id)
-        if (mesh) updateTerrainMesh(mesh, w.sub, w.size, w.heights, w.colors)
+        const now = performance.now()
+        if (now - lastRefresh > 50) {
+          lastRefresh = now
+          refreshTerrain()
+        }
       } catch (err) {
         console.error('[terrain] sculpt error', err)
       }
@@ -289,18 +302,9 @@ export function Viewport(props: ViewportProps) {
       const tool = toolRef.current
       if (!tool || isPlayingRef.current || e.button !== 0) return
       const w = terrainWorkRef.current
-      if (!w) {
-        console.log('[terrain] down: no terrain work')
-        return
-      }
+      if (!w) return
       const tm = meshesRef.current.get(w.id)
       const pick = pickAt(e.clientX, e.clientY)
-      console.log('[terrain] down', {
-        tool,
-        hit: pick ? pick.hit : null,
-        picked: pick && pick.pickedMesh ? pick.pickedMesh.name : null,
-        want: tm ? tm.name : null
-      })
       if (!pick || !pick.hit || !pick.pickedPoint || !tm) return
       if (pick.pickedMesh !== tm) return
       sculpting = true
@@ -319,7 +323,7 @@ export function Viewport(props: ViewportProps) {
       sculpting = false
       const w = terrainWorkRef.current
       if (w) {
-        console.log('[terrain] commit')
+        refreshTerrain()
         commitTerrainRef.current(
           Array.from(w.heights, round2),
           Array.from(w.colors, round2)
@@ -524,15 +528,11 @@ export function Viewport(props: ViewportProps) {
       if (!w || w.id !== tObj.id || w.srcH !== td.heights || w.srcC !== td.colors) {
         const heights = Float32Array.from(td.heights)
         const colors = Float32Array.from(td.colors)
-        let mesh = meshesRef.current.get(tObj.id)
-        if (!mesh) {
-          mesh = createTerrainMesh(scene, tObj.id, td.sub, td.size, heights, colors)
-          mesh.isPickable = true
-          meshesRef.current.set(tObj.id, mesh)
-          console.log('[terrain] created mesh', mesh.name)
-        } else {
-          updateTerrainMesh(mesh, td.sub, td.size, heights, colors)
-        }
+        const old = meshesRef.current.get(tObj.id)
+        if (old) old.dispose()
+        const mesh = createTerrainMesh(scene, tObj.id, td.sub, td.size, heights, colors)
+        mesh.isPickable = true
+        meshesRef.current.set(tObj.id, mesh)
         terrainWorkRef.current = {
           id: tObj.id,
           sub: td.sub,
