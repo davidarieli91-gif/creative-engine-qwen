@@ -12,6 +12,7 @@ interface ToolbarProps {
   onTogglePlay: () => void
   onSave: () => void
   onLoadClick: () => void
+  onNew: () => void
   gizmoMode: GizmoMode
   onGizmoMode: (mode: GizmoMode) => void
 }
@@ -26,6 +27,7 @@ export function Toolbar({
   onTogglePlay,
   onSave,
   onLoadClick,
+  onNew,
   gizmoMode,
   onGizmoMode
 }: ToolbarProps) {
@@ -50,6 +52,9 @@ export function Toolbar({
       <button className="btn" onClick={onToggleLeft}>
         {leftCollapsed ? '→' : '←'} Scene
       </button>
+      <button className="btn" style={{ ...dimmed, background: '#16825d' }} onClick={onNew}>
+        ✨ New
+      </button>
       <button className="btn" style={dimmed} onClick={() => onAddObject('cube')}>+ Cube</button>
       <button className="btn" style={dimmed} onClick={() => onAddObject('sphere')}>+ Sphere</button>
       <button className="btn" style={dimmed} onClick={() => onAddObject('cylinder')}>+ Cylinder</button>
@@ -59,7 +64,7 @@ export function Toolbar({
 
       {gizmoButton('position', '✥ Move', 'Двигать объект мышкой')}
       {gizmoButton('rotation', '↻ Rotate', 'Вращать объект мышкой')}
-      {gizmoButton('scale', '⤢ Scale', 'Масштабировать объект мышкой')}
+      {gizmoButton('scale', ' Scale', 'Масштабировать объект мышкой')}
 
       <span style={{ width: 1, background: '#3e3e42', margin: '0 4px' }} />
 
