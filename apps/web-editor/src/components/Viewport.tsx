@@ -152,6 +152,7 @@ export function Viewport(props: ViewportProps) {
       else if (d.type === 'color') { const m = meshesRef.current.get(d.objectId); const mt = m?.material as StandardMaterial | undefined; if (mt) mt.diffuseColor = Color3.FromHexString(d.color || '#ffcc00') }
       else if (d.type === 'sink' && d.objectId) sinkTargetRef.current.set(d.objectId, 1)
       else if (d.type === 'float' && d.objectId) sinkTargetRef.current.set(d.objectId, 0)
+      else if (d.type === 'sound') playSound(d.message || 'coin')
     })
   }
   const runChainRef = useRef(runChain)
@@ -356,15 +357,16 @@ export function Viewport(props: ViewportProps) {
               pm.position.addInPlace(move)
               if (!playerObj.behaviors?.float) pm.rotationQuaternion = Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0)
             }
-                     if (!playerObj.behaviors?.bounce && !playerObj.behaviors?.float) {
+                   if (!playerObj.behaviors?.bounce && !playerObj.behaviors?.float) {
               const groundY = tw
                 ? topHeightAt(tw.vox, tw.w, tw.h, tw.d, tw.size, pm.position.x, pm.position.z) + 0.5
                 : 0.5
               let vy = playerVyRef.current
               vy -= 22 * dt
               let y = pm.position.y + vy * dt
-              if (keys.has('Space') && y <= groundY + 0.01) { vy = 8.5; playSound('jump') }
-              if (y <= groundY) { y = groundY; vy = 0 }
+              const grounded = y <= groundY
+              if (grounded) { y = groundY; vy = 0 }
+              if (keys.has('Space') && grounded) { vy = 8.5; y = groundY + 0.02; playSound('jump') }
               pm.position.y = y
               playerVyRef.current = vy
             }
