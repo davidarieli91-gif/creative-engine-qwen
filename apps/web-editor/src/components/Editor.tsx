@@ -7,6 +7,7 @@ import { LogicEditor } from './LogicEditor'
 import { Wizard } from './Wizard'
 import { LogicData } from '../logic'
 import { WizardConfig, generateProject } from '../wizard'
+import { exportGameHtml } from '../exporter'
 
 export interface Vector3D {
   x: number
@@ -142,6 +143,17 @@ export function Editor() {
     URL.revokeObjectURL(url)
   }
 
+  const exportGame = () => {
+    const html = exportGameHtml(objects, logic, 'My Game — Creative Engine Qwen')
+    const blob = new Blob([html], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'my-game.html'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const loadFromFile = (file: File) => {
     const reader = new FileReader()
     reader.onload = () => {
@@ -175,6 +187,7 @@ export function Editor() {
         onSave={saveToFile}
         onLoadClick={() => fileInputRef.current?.click()}
         onNew={() => setWizardOpen(true)}
+        onExport={exportGame}
         gizmoMode={gizmoMode}
         onGizmoMode={setGizmoMode}
       />
