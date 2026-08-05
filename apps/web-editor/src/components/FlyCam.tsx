@@ -161,8 +161,8 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
       const move = Vector3.Zero()
       if (st.keys.has('KeyW')) move.addInPlace(fwdV)
       if (st.keys.has('KeyS')) move.subtractInPlace(fwdV)
-      if (st.keys.has('KeyD')) move.addInPlace(rightV)
-      if (st.keys.has('KeyA')) move.subtractInPlace(rightV)
+      if (st.keys.has('KeyD')) move.subtractInPlace(rightV)
+      if (st.keys.has('KeyA')) move.addInPlace(rightV)
       if (st.keys.has('KeyE')) move.addInPlace(Vector3.Up())
       if (st.keys.has('KeyQ')) move.subtractInPlace(Vector3.Up())
       if (move.lengthSquared() > 0) { move.normalize().scaleInPlace(sp); st.pos.addInPlace(move) }
