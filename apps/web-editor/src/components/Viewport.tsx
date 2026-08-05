@@ -1,31 +1,16 @@
 import { useEffect, useRef } from 'react'
 import {
-  Engine,
-  Scene,
-  ArcRotateCamera,
-  Vector3,
-  HemisphericLight,
-  DirectionalLight,
-  MeshBuilder,
-  StandardMaterial,
-  Color3,
-  Color4,
-  ActionManager,
-  ExecuteCodeAction,
-  GizmoManager,
-  Quaternion,
-  VertexData,
-  Mesh
+  Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
+  MeshBuilder, StandardMaterial, Color3, Color4, ActionManager, ExecuteCodeAction,
+  GizmoManager, Quaternion, VertexData, NoiseProceduralTexture, Mesh
 } from '@babylonjs/core'
+import { WaterMaterial } from '@babylonjs/materials'
 import { SceneObject } from './Editor'
 import { GizmoMode } from './Toolbar'
 import { LogicData, LogicNode, buildChains } from '../logic'
 import {
-  TerrainTool,
-  applyBrush,
-  createTerrainMesh,
-  buildTerrainGeometry,
-  sampleHeight
+  TerrainTool, VoxelTerrainData, b64ToBytes, bytesToB64, buildVoxelGeometry,
+  createVoxelMesh, applyVoxelBrush, topHeightAt, waveHExport as _unused
 } from '../terrain'
 
 interface ViewportProps {
@@ -40,8 +25,8 @@ interface ViewportProps {
   terrainTool: TerrainTool | null
   brushRadius: number
   brushStrength: number
-  paintColor: string
-  onCommitTerrain: (heights: number[], colors: number[]) => void
+  paintId: number
+  onCommitTerrain: (voxels: string, mats: string) => void
 }
 
 const rad = (d: number) => (d * Math.PI) / 180
@@ -67,28 +52,16 @@ function waveH(x: number, z: number, t: number, amp: number, speed: number): num
   )
 }
 
-function liveUpdateTerrain(
-  mesh: Mesh,
-  sub: number,
-  size: number,
-  heights: Float32Array,
-  colors: Float32Array
-) {
-  const geo = buildTerrainGeometry(sub, size, heights, colors)
-  mesh.setVerticesData('position', geo.positions, false)
-  mesh.setVerticesData('normal', geo.normals, false)
-  mesh.setVerticesData('color', geo.colors, false)
-  mesh.refreshBoundingInfo()
-}
-
 interface TerrainWork {
   id: string
-  sub: number
+  w: number
+  h: number
+  d: number
   size: number
-  heights: Float32Array
-  colors: Float32Array
-  srcH: number[]
-  srcC: number[]
+  vox: Uint8Array
+  mat: Uint8Array
+  srcV: string
+  srcM: string
 }
 
 interface WaterWork {
@@ -138,7 +111,7 @@ export function Viewport(props: ViewportProps) {
   const toolRef = useRef<TerrainTool | null>(props.terrainTool)
   const radiusRef = useRef(props.brushRadius)
   const strengthRef = useRef(props.brushStrength)
-  const paintRef = useRef(props.paintColor)
+  const paintRef = useRef(props.paintId)
   const commitTerrainRef = useRef(props.onCommitTerrain)
 
   useEffect(() => { objectsRef.current = objects }, [objects])
@@ -150,7 +123,7 @@ export function Viewport(props: ViewportProps) {
   useEffect(() => { toolRef.current = props.terrainTool }, [props.terrainTool])
   useEffect(() => { radiusRef.current = props.brushRadius }, [props.brushRadius])
   useEffect(() => { strengthRef.current = props.brushStrength }, [props.brushStrength])
-  useEffect(() => { paintRef.current = props.paintColor }, [props.paintColor])
+  useEffect(() => { paintRef.current = props.paintId }, [props.paintId])
   useEffect(() => { commitTerrainRef.current = props.onCommitTerrain }, [props.onCommitTerrain])
 
   useEffect(() => {
@@ -261,21 +234,13 @@ export function Viewport(props: ViewportProps) {
     const scene = new Scene(engine)
     scene.clearColor = new Color4(0.07, 0.07, 0.12, 1)
 
-    const camera = new ArcRotateCamera(
-      'camera',
-      Math.PI / 2,
-      Math.PI / 3,
-      12,
-      new Vector3(0, 0.5, 0),
-      scene
-    )
+    const camera = new ArcRotateCamera('camera', Math.PI / 2, Math.PI / 3, 12, new Vector3(0, 0.5, 0), scene)
     camera.attachControl(canvasRef.current, true)
     camera.wheelPrecision = 20
     cameraRef.current = camera
 
     const hemi = new HemisphericLight('hemi', Vector3.Up(), scene)
     hemi.intensity = 0.5
-
     const sun = new DirectionalLight('sun', new Vector3(-1, -2, -1), scene)
     sun.intensity = 0.8
 
@@ -304,32 +269,35 @@ export function Viewport(props: ViewportProps) {
     window.addEventListener('keyup', onKeyUp)
 
     let sculpting = false
-    let flattenY = 0
     let lastRefresh = 0
+
+    const remeshTerrain = () => {
+      const w = terrainWorkRef.current
+      if (!w) return
+      const geo = buildVoxelGeometry(w.vox, w.mat, w.w, w.h, w.d, w.size)
+      const newMesh = createVoxelMesh(scene, w.id, geo)
+      newMesh.isPickable = true
+      const old = meshesRef.current.get(w.id)
+      meshesRef.current.set(w.id, newMesh)
+      if (old) old.dispose()
+    }
 
     const sculptAt = (p: Vector3) => {
       const w = terrainWorkRef.current
       const tool = toolRef.current
       if (!w || !tool) return
       try {
-        applyBrush(
-          w.heights,
-          w.colors,
-          w.sub,
-          w.size,
-          p.x,
-          p.z,
-          radiusRef.current,
-          tool === 'raise' || tool === 'lower' ? strengthRef.current * 0.3 : strengthRef.current,
+        applyVoxelBrush(
+          w.vox, w.mat, w.w, w.h, w.d, w.size,
+          p.x, p.y, p.z,
+          tool === 'raise' || tool === 'lower' ? radiusRef.current : radiusRef.current,
           tool,
-          Color3.FromHexString(paintRef.current),
-          flattenY
+          paintRef.current
         )
         const now = performance.now()
-        if (now - lastRefresh > 50) {
+        if (now - lastRefresh > 60) {
           lastRefresh = now
-          const mesh = meshesRef.current.get(w.id)
-          if (mesh) liveUpdateTerrain(mesh, w.sub, w.size, w.heights, w.colors)
+          remeshTerrain()
         }
       } catch (err) {
         console.error('[terrain] sculpt error', err)
@@ -353,7 +321,6 @@ export function Viewport(props: ViewportProps) {
       if (!pick || !pick.hit || !pick.pickedPoint || !tm) return
       if (pick.pickedMesh !== tm) return
       sculpting = true
-      flattenY = pick.pickedPoint.y
       sculptAt(pick.pickedPoint)
     }
 
@@ -368,12 +335,8 @@ export function Viewport(props: ViewportProps) {
       sculpting = false
       const w = terrainWorkRef.current
       if (w) {
-        const mesh = meshesRef.current.get(w.id)
-        if (mesh) liveUpdateTerrain(mesh, w.sub, w.size, w.heights, w.colors)
-        commitTerrainRef.current(
-          Array.from(w.heights, round2),
-          Array.from(w.colors, round2)
-        )
+        remeshTerrain()
+        commitTerrainRef.current(bytesToB64(w.vox), bytesToB64(w.mat))
       }
     }
 
@@ -408,7 +371,7 @@ export function Viewport(props: ViewportProps) {
         lastTsRef.current = now
         const t = (now - playStartRef.current) / 1000
 
-        const w = terrainWorkRef.current
+        const tw = terrainWorkRef.current
         const playerObj = objectsRef.current.find((o) => o.behaviors?.player)
 
         if (wd) {
@@ -436,12 +399,8 @@ export function Viewport(props: ViewportProps) {
 
             if (!obj.behaviors?.player) {
               const d = 1.5
-              const hx =
-                waveH(x + d, z, t, wd.waveHeight, wd.waveSpeed) -
-                waveH(x - d, z, t, wd.waveHeight, wd.waveSpeed)
-              const hz =
-                waveH(x, z + d, t, wd.waveHeight, wd.waveSpeed) -
-                waveH(x, z - d, t, wd.waveHeight, wd.waveSpeed)
+              const hx = waveH(x + d, z, t, wd.waveHeight, wd.waveSpeed) - waveH(x - d, z, t, wd.waveHeight, wd.waveSpeed)
+              const hz = waveH(x, z + d, t, wd.waveHeight, wd.waveSpeed) - waveH(x, z - d, t, wd.waveHeight, wd.waveSpeed)
               mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(0, hz * 0.12, -hx * 0.12)
             }
           })
@@ -466,17 +425,12 @@ export function Viewport(props: ViewportProps) {
               move.normalize().scaleInPlace(0.12)
               playerMesh.position.addInPlace(move)
               if (!playerObj.behaviors?.float) {
-                playerMesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(
-                  Math.atan2(move.x, move.z), 0, 0
-                )
+                playerMesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0)
               }
             }
-            if (w && !playerObj.behaviors?.bounce && !playerObj.behaviors?.float) {
-              const half = w.size / 2
-              if (Math.abs(playerMesh.position.x) < half && Math.abs(playerMesh.position.z) < half) {
-                playerMesh.position.y =
-                  sampleHeight(w.heights, w.sub, w.size, playerMesh.position.x, playerMesh.position.z) + 0.5
-              }
+            if (tw && !playerObj.behaviors?.bounce && !playerObj.behaviors?.float) {
+              playerMesh.position.y =
+                topHeightAt(tw.vox, tw.w, tw.h, tw.d, tw.size, playerMesh.position.x, playerMesh.position.z) + 0.5
             }
             camera.target.copyFrom(playerMesh.position)
             camera.target.y += 0.5
@@ -616,30 +570,27 @@ export function Viewport(props: ViewportProps) {
       const mat = mesh.material as StandardMaterial
       const col = obj.color ?? { r: 0.2, g: 0.5, b: 0.8 }
       mat.diffuseColor = new Color3(col.r, col.g, col.b)
-      mat.emissiveColor =
-        selectedObject?.id === obj.id ? new Color3(0.25, 0.08, 0.08) : Color3.Black()
+      mat.emissiveColor = selectedObject?.id === obj.id ? new Color3(0.25, 0.08, 0.08) : Color3.Black()
     })
 
     const tObj = objects.find((o) => o.type === 'terrain')
     if (groundRef.current) groundRef.current.setEnabled(!tObj)
 
-    if (tObj && tObj.terrain) {
-      const td = tObj.terrain
-      const w = terrainWorkRef.current
-      if (!w || w.id !== tObj.id || w.srcH !== td.heights || w.srcC !== td.colors) {
-        const heights = Float32Array.from(td.heights)
-        const colors = Float32Array.from(td.colors)
-        let mesh = meshesRef.current.get(tObj.id)
-        if (!mesh) {
-          mesh = createTerrainMesh(scene, tObj.id, td.sub, td.size, heights, colors)
-          mesh.isPickable = true
-          meshesRef.current.set(tObj.id, mesh)
-        } else {
-          liveUpdateTerrain(mesh, td.sub, td.size, heights, colors)
-        }
+    if (tObj && tObj.terrain && tObj.terrain.voxels) {
+      const td = tObj.terrain as VoxelTerrainData
+      const w0 = terrainWorkRef.current
+      if (!w0 || w0.id !== tObj.id || w0.srcV !== td.voxels || w0.srcM !== td.mats) {
+        const vox = b64ToBytes(td.voxels)
+        const mat = b64ToBytes(td.mats)
+        const geo = buildVoxelGeometry(vox, mat, td.w, td.h, td.d, td.size)
+        const newMesh = createVoxelMesh(scene, tObj.id, geo)
+        newMesh.isPickable = true
+        const old = meshesRef.current.get(tObj.id)
+        meshesRef.current.set(tObj.id, newMesh)
+        if (old) old.dispose()
         terrainWorkRef.current = {
-          id: tObj.id, sub: td.sub, size: td.size, heights, colors,
-          srcH: td.heights, srcC: td.colors
+          id: tObj.id, w: td.w, h: td.h, d: td.d, size: td.size,
+          vox, mat, srcV: td.voxels, srcM: td.mats
         }
       }
     } else if (terrainWorkRef.current) {
@@ -676,14 +627,14 @@ export function Viewport(props: ViewportProps) {
         const indices: number[] = []
         const fill = (flipped: boolean) => {
           indices.length = 0
-          for (let row = 0; row < sub; row++) {
-            for (let col = 0; col < sub; col++) {
-              const a = row * (sub + 1) + col
+          for (let r = 0; r < sub; r++) {
+            for (let c = 0; c < sub; c++) {
+              const a = r * (sub + 1) + c
               const b = a + 1
-              const c = a + sub + 1
-              const d = c + 1
-              if (flipped) indices.push(a, c, b, b, c, d)
-              else indices.push(c, a, b, b, d, c)
+              const cc = a + sub + 1
+              const d = cc + 1
+              if (flipped) indices.push(a, cc, b, b, cc, d)
+              else indices.push(cc, a, b, b, d, cc)
             }
           }
         }
@@ -700,18 +651,37 @@ export function Viewport(props: ViewportProps) {
         vd.normals = normals
         vd.indices = indices
         vd.applyToMesh(mesh, true)
-        const mat = new StandardMaterial('wm_' + wObj.id, scene)
-        mat.diffuseColor = Color3.FromHexString(wd.color || '#1e6fd8')
-        mat.specularColor = new Color3(0.7, 0.9, 1)
-        mat.alpha = 0.72
-        mat.backFaceCulling = false
+
+        let mat: any = null
+        try {
+          const wm = new WaterMaterial('wm_' + wObj.id, scene)
+          const noise = new NoiseProceduralTexture('wbn_' + wObj.id, 256, scene)
+          noise.animationSpeedEnabled = true
+          wm.bumpTexture = noise
+          wm.windForce = 5 + wd.waveSpeed * 15
+          wm.waveLength = 0.4
+          wm.timeScale = wd.waveSpeed
+          wm.bumpLevel = 2
+          wm.alpha = 0.85
+          mat = wm
+        } catch {
+          const sm = new StandardMaterial('wm_' + wObj.id, scene)
+          sm.diffuseColor = Color3.FromHexString(wd.color || '#1e6fd8')
+          sm.specularColor = new Color3(0.7, 0.9, 1)
+          sm.alpha = 0.72
+          sm.backFaceCulling = false
+          mat = sm
+        }
         mesh.material = mat
         meshesRef.current.set(wObj.id, mesh)
         ww = { id: wObj.id, sub, size: wd.size, mesh, base, positions, normals, indices }
         waterWorkRef.current = ww
       } else {
-        const mat = ww.mesh.material as StandardMaterial
-        mat.diffuseColor = Color3.FromHexString(wd.color || '#1e6fd8')
+        const m: any = ww.mesh.material
+        if (m && m.windForce !== undefined) {
+          m.windForce = 5 + wd.waveSpeed * 15
+          m.timeScale = wd.waveSpeed
+        }
       }
     } else {
       waterDataRef.current = null
