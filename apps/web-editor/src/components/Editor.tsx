@@ -3,6 +3,8 @@ import { Viewport } from './Viewport'
 import { SceneHierarchy } from './SceneHierarchy'
 import { Inspector } from './Inspector'
 import { Toolbar, GizmoMode } from './Toolbar'
+import { LogicEditor } from './LogicEditor'
+import { LogicData } from '../logic'
 
 export interface Vector3D {
   x: number
@@ -34,30 +36,54 @@ export interface SceneObject {
   behaviors: ObjectBehaviors
 }
 
+interface SavedProject {
+  objects: SceneObject[]
+  logic: LogicData
+}
+
 const STORAGE_KEY = 'creative-engine-qwen-scene'
 
-function loadSavedScene(): SceneObject[] {
+function loadSavedProject(): SavedProject {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw) as SceneObject[]
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return { objects: parsed, logic: { nodes: [], edges: [] } }
+      return {
+        objects: parsed.objects ?? [],
+        logic: parsed.logic ?? { nodes: [], edges: [] }
+      }
+    }
   } catch {
     // игнорируем повреждённые данные
   }
-  return []
+  return { objects: [], logic: { nodes: [], edges: [] } }
 }
 
 export function Editor() {
+  const initialRef = useRef<SavedProject | null>(null)
+  if (!initialRef.current) initialRef.current = loadSavedProject()
+
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
-  const [objects, setObjects] = useState<SceneObject[]>(loadSavedScene)
+  const [objects, setObjects] = useState<SceneObject[]>(initialRef.current.objects)
+  const [logic, setLogic] = useState<LogicData>(initialRef.current.logic)
   const [selectedObject, setSelectedObject] = useState<SceneObject | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('position')
+  const [logicOpen, setLogicOpen] = useState(false)
+  const [hud, setHud] = useState({ score: 0, message: '' })
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(objects))
-  }, [objects])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ objects, logic }))
+  }, [objects, logic])
+
+  useEffect(() => {
+    if (!hud.message) return
+    const t = setTimeout(() => setHud((h) => ({ ...h, message: '' })), 2500)
+    return () => clearTimeout(t)
+  }, [hud.message])
 
   const addObject = (type: SceneObject['type']) => {
     if (isPlaying) return
@@ -87,13 +113,18 @@ export function Editor() {
     if (selectedObject?.id === id) setSelectedObject(null)
   }
 
+  const togglePlay = () => {
+    setIsPlaying((p) => !p)
+    setHud({ score: 0, message: '' })
+  }
+
   const saveToFile = () => {
-    const data = JSON.stringify({ version: 1, objects }, null, 2)
+    const data = JSON.stringify({ version: 1, objects, logic }, null, 2)
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'my-scene.json'
+    a.download = 'my-game.json'
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -106,12 +137,13 @@ export function Editor() {
         const list = Array.isArray(parsed) ? parsed : parsed.objects
         if (Array.isArray(list)) {
           setObjects(list)
+          setLogic(parsed.logic ?? { nodes: [], edges: [] })
           setSelectedObject(null)
         } else {
-          alert('Не удалось прочитать файл сцены')
+          alert('Не удалось прочитать файл проекта')
         }
       } catch {
-        alert('Не удалось прочитать файл сцены')
+        alert('Не удалось прочитать файл проекта')
       }
     }
     reader.readAsText(file)
@@ -126,7 +158,7 @@ export function Editor() {
         onToggleLeft={() => setLeftPanelCollapsed(!leftPanelCollapsed)}
         onToggleRight={() => setRightPanelCollapsed(!rightPanelCollapsed)}
         isPlaying={isPlaying}
-        onTogglePlay={() => setIsPlaying(!isPlaying)}
+        onTogglePlay={togglePlay}
         onSave={saveToFile}
         onLoadClick={() => fileInputRef.current?.click()}
         gizmoMode={gizmoMode}
@@ -176,7 +208,58 @@ export function Editor() {
             onUpdate={updateObject}
             isPlaying={isPlaying}
             gizmoMode={gizmoMode}
+            logic={logic}
+            onHud={setHud}
           />
+
+          {isPlaying && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 10,
+                left: 12,
+                fontSize: 20,
+                fontWeight: 800,
+                color: '#fff',
+                textShadow: '0 1px 4px #000',
+                pointerEvents: 'none'
+              }}
+            >
+              🏆 {hud.score}
+            </div>
+          )}
+
+          {isPlaying && hud.message && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '38%',
+                left: 0,
+                right: 0,
+                textAlign: 'center',
+                fontSize: 30,
+                fontWeight: 800,
+                color: '#ffe08a',
+                textShadow: '0 2px 8px #000',
+                pointerEvents: 'none'
+              }}
+            >
+              {hud.message}
+            </div>
+          )}
+
+          <button
+            className="btn"
+            style={{
+              position: 'absolute',
+              bottom: 10,
+              left: 10,
+              background: logicOpen ? '#0e639c' : '#3e3e42'
+            }}
+            onClick={() => setLogicOpen(!logicOpen)}
+          >
+            🧩 Logic
+          </button>
         </div>
 
         <div
@@ -201,6 +284,12 @@ export function Editor() {
           )}
         </div>
       </div>
+
+      {logicOpen && (
+        <div style={{ height: 320, borderTop: '1px solid #3e3e42', background: '#1e1e1e' }}>
+          <LogicEditor logic={logic} objects={objects} onChange={setLogic} />
+        </div>
+      )}
     </div>
   )
 }
