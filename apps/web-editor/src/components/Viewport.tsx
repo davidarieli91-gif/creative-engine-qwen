@@ -10,7 +10,7 @@ import { GizmoMode } from './Toolbar'
 import { LogicData, LogicNode, buildChains } from '../logic'
 import {
   TerrainTool, VoxelTerrainData, b64ToBytes, bytesToB64, buildVoxelGeometry,
-  createVoxelMesh, applyVoxelBrush, topHeightAt, waveHExport as _unused
+  createVoxelMesh, applyVoxelBrush, topHeightAt
 } from '../terrain'
 
 interface ViewportProps {
@@ -50,6 +50,81 @@ function waveH(x: number, z: number, t: number, amp: number, speed: number): num
       0.3 * Math.sin(z * 0.23 + t * speed * 1.31) +
       0.2 * Math.sin((x + z) * 0.11 + t * speed * 0.71))
   )
+}
+
+// DDA-обход вокселей лучом по алгоритму Amanatides & Woo (1987),
+// та же техника, что в открытом репозитории DeadlockCode/voxel_ray_traversal (MIT/Apache-2.0)
+interface VoxelHit { x: number; y: number; z: number; nx: number; ny: number; nz: number }
+
+function raycastVoxels(
+  vox: Uint8Array, w: number, h: number, d: number, size: number,
+  o: { x: number; y: number; z: number }, dir: { x: number; y: number; z: number },
+  maxDist: number
+): VoxelHit | null {
+  let dx = dir.x
+  let dy = dir.y
+  let dz = dir.z
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  if (len < 1e-9) return null
+  dx /= len
+  dy /= len
+  dz /= len
+
+  let x = Math.floor(o.x / size + w / 2)
+  let y = Math.floor(o.y / size)
+  let z = Math.floor(o.z / size + d / 2)
+
+  const inRange = (a: number, b: number, c: number) => a >= 0 && b >= 0 && c >= 0 && a < w && b < h && c < d
+  if (inRange(x, y, z) && vox[(y * d + z) * w + x]) return { x, y, z, nx: 0, ny: 1, nz: 0 }
+
+  const stepX = dx > 0 ? 1 : -1
+  const stepY = dy > 0 ? 1 : -1
+  const stepZ = dz > 0 ? 1 : -1
+
+  const tDeltaX = dx !== 0 ? Math.abs(size / dx) : Infinity
+  const tDeltaY = dy !== 0 ? Math.abs(size / dy) : Infinity
+  const tDeltaZ = dz !== 0 ? Math.abs(size / dz) : Infinity
+
+  const worldX = (x - w / 2) * size
+  const worldY = y * size
+  const worldZ = (z - d / 2) * size
+
+  let tMaxX = dx !== 0 ? (dx > 0 ? worldX + size - o.x : o.x - worldX) / Math.abs(dx) : Infinity
+  let tMaxY = dy !== 0 ? (dy > 0 ? worldY + size - o.y : o.y - worldY) / Math.abs(dy) : Infinity
+  let tMaxZ = dz !== 0 ? (dz > 0 ? worldZ + size - o.z : o.z - worldZ) / Math.abs(dz) : Infinity
+
+  let nx = 0
+  let ny = 0
+  let nz = 0
+  let t = 0
+
+  while (t <= maxDist) {
+    if (tMaxX < tMaxY && tMaxX < tMaxZ) {
+      x += stepX
+      t = tMaxX
+      tMaxX += tDeltaX
+      nx = -stepX
+      ny = 0
+      nz = 0
+    } else if (tMaxY < tMaxZ) {
+      y += stepY
+      t = tMaxY
+      tMaxY += tDeltaY
+      nx = 0
+      ny = -stepY
+      nz = 0
+    } else {
+      z += stepZ
+      t = tMaxZ
+      tMaxZ += tDeltaZ
+      nx = 0
+      ny = 0
+      nz = -stepZ
+    }
+    if (x < -2 || x > w + 1 || y < -2 || y > h + 1 || z < -2 || z > d + 1) break
+    if (inRange(x, y, z) && vox[(y * d + z) * w + x]) return { x, y, z, nx, ny, nz }
+  }
+  return null
 }
 
 interface TerrainWork {
@@ -282,15 +357,39 @@ export function Viewport(props: ViewportProps) {
       if (old) old.dispose()
     }
 
-    const sculptAt = (p: Vector3) => {
+    const raycastTerrain = (clientX: number, clientY: number): VoxelHit | null => {
+      const canvas = canvasRef.current
+      const sc = sceneRef.current
+      const w = terrainWorkRef.current
+      if (!canvas || !sc || !w) return null
+      const rect = canvas.getBoundingClientRect()
+      const ray = sc.createPickingRay(clientX - rect.left, clientY - rect.top)
+      return raycastVoxels(
+        w.vox, w.w, w.h, w.d, w.size,
+        ray.origin, ray.direction, 400
+      )
+    }
+
+    const sculptHit = (hit: VoxelHit) => {
       const w = terrainWorkRef.current
       const tool = toolRef.current
       if (!w || !tool) return
       try {
+        let bx = hit.x
+        let by = hit.y
+        let bz = hit.z
+        if (tool === 'raise') {
+          bx += hit.nx
+          by += hit.ny
+          bz += hit.nz
+        }
+        const px = (bx + 0.5 - w.w / 2) * w.size
+        const py = (by + 0.5) * w.size
+        const pz = (bz + 0.5 - w.d / 2) * w.size
         applyVoxelBrush(
           w.vox, w.mat, w.w, w.h, w.d, w.size,
-          p.x, p.y, p.z,
-          tool === 'raise' || tool === 'lower' ? radiusRef.current : radiusRef.current,
+          px, py, pz,
+          radiusRef.current,
           tool,
           paintRef.current
         )
@@ -304,30 +403,19 @@ export function Viewport(props: ViewportProps) {
       }
     }
 
-    const pickAt = (clientX: number, clientY: number) => {
-      const canvas = canvasRef.current
-      if (!canvas) return null
-      const rect = canvas.getBoundingClientRect()
-      return scene.pick(clientX - rect.left, clientY - rect.top)
-    }
-
     const onPointerDown = (e: PointerEvent) => {
-      const tool = toolRef.current
-      if (!tool || isPlayingRef.current || e.button !== 0) return
-      const w = terrainWorkRef.current
-      if (!w) return
-      const tm = meshesRef.current.get(w.id)
-      const pick = pickAt(e.clientX, e.clientY)
-      if (!pick || !pick.hit || !pick.pickedPoint || !tm) return
-      if (pick.pickedMesh !== tm) return
+      if (!toolRef.current || isPlayingRef.current || e.button !== 0) return
+      if (!terrainWorkRef.current) return
+      const hit = raycastTerrain(e.clientX, e.clientY)
+      if (!hit) return
       sculpting = true
-      sculptAt(pick.pickedPoint)
+      sculptHit(hit)
     }
 
     const onPointerMove = (e: PointerEvent) => {
       if (!sculpting) return
-      const pick = pickAt(e.clientX, e.clientY)
-      if (pick && pick.hit && pick.pickedPoint) sculptAt(pick.pickedPoint)
+      const hit = raycastTerrain(e.clientX, e.clientY)
+      if (hit) sculptHit(hit)
     }
 
     const onPointerUp = () => {
