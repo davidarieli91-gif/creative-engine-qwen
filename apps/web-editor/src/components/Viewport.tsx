@@ -8,6 +8,7 @@ import { WaterMaterial } from '@babylonjs/materials'
 import { SceneObject } from './Editor'
 import { GizmoMode } from './Toolbar'
 import { LogicData, LogicNode, buildChains } from '../logic'
+import { playSound } from '../sound'
 import {
   TerrainTool, VoxelTerrainData, CHUNK, b64ToBytes, rleDecode, rleEncode,
   buildVoxelGeometryRegion, createVoxelMesh, applyVoxelBrush, topHeightAt
@@ -90,6 +91,7 @@ export function Viewport(props: ViewportProps) {
   const timerAccRef = useRef<Map<string, number>>(new Map())
   const scoreRef = useRef(0)
   const runtimeHiddenRef = useRef<Set<string>>(new Set())
+  const playerVyRef = useRef(0)
   const toolRef = useRef(props.terrainTool)
   const radiusRef = useRef(props.brushRadius)
   const strengthRef = useRef(props.brushStrength)
@@ -207,7 +209,7 @@ export function Viewport(props: ViewportProps) {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) { e.preventDefault(); keysRef.current.add(e.code) }
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) { e.preventDefault(); keysRef.current.add(e.code) }
     }
     const onKeyUp = (e: KeyboardEvent) => { keysRef.current.delete(e.code) }
     window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp)
@@ -354,8 +356,18 @@ export function Viewport(props: ViewportProps) {
               pm.position.addInPlace(move)
               if (!playerObj.behaviors?.float) pm.rotationQuaternion = Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0)
             }
-            if (tw && !playerObj.behaviors?.bounce && !playerObj.behaviors?.float)
-              pm.position.y = topHeightAt(tw.vox, tw.w, tw.h, tw.d, tw.size, pm.position.x, pm.position.z) + 0.5
+                     if (!playerObj.behaviors?.bounce && !playerObj.behaviors?.float) {
+              const groundY = tw
+                ? topHeightAt(tw.vox, tw.w, tw.h, tw.d, tw.size, pm.position.x, pm.position.z) + 0.5
+                : 0.5
+              let vy = playerVyRef.current
+              vy -= 22 * dt
+              let y = pm.position.y + vy * dt
+              if (keys.has('Space') && y <= groundY + 0.01) { vy = 8.5; playSound('jump') }
+              if (y <= groundY) { y = groundY; vy = 0 }
+              pm.position.y = y
+              playerVyRef.current = vy
+            }
             camera.target.copyFrom(pm.position)
             camera.target.y += 0.5
           }
