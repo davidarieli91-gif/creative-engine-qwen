@@ -13,7 +13,7 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
   const removedInputsRef = useRef<any>(null)
   const stRef = useRef({
     pos: new Vector3(0, 20, -30), yaw: 0, pitch: -0.3, tYaw: 0, tPitch: -0.3, roll: 0,
-    speed: 24, keys: new Set<string>(), looking: false
+    speed: 48, keys: new Set<string>(), looking: false
   })
   const flyOnRef = useRef(flyOn)
   const colRef = useRef(collision)
@@ -122,11 +122,11 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
     const onDown = (e: PointerEvent) => { if (e.button === 2) st.looking = true }
     const onMove = (e: PointerEvent) => {
       if (!st.looking) return
-      st.tYaw -= e.movementX * 0.0032
+      st.tYaw += e.movementX * 0.0032
       st.tPitch = Math.max(-1.45, Math.min(1.45, st.tPitch - e.movementY * 0.0032))
     }
     const onUp = (e: PointerEvent) => { if (e.button === 2) st.looking = false }
-    const onWheel = (e: WheelEvent) => { st.speed = Math.max(4, Math.min(140, st.speed * (e.deltaY < 0 ? 1.15 : 0.87))) }
+    const onWheel = (e: WheelEvent) => { st.speed = Math.max(8, Math.min(280, st.speed * (e.deltaY < 0 ? 1.15 : 0.87))) }
     const onCtx = (e: Event) => e.preventDefault()
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
