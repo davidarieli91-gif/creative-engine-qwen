@@ -226,6 +226,37 @@ function msg(t) {
   el._t = setTimeout(function () { el.style.opacity = 0; }, 2500);
 }
 
+var AC = null;
+function ac() { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume(); return AC; }
+function tone(freq, dur, type, vol, slideTo, delay) {
+  var c = ac(); var t0 = c.currentTime + (delay || 0);
+  var o = c.createOscillator(); var g = c.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t0);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+  g.gain.setValueAtTime(vol || 0.2, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  o.connect(g); g.connect(c.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function noiseS(dur, vol) {
+  var c = ac(); var len = Math.floor(c.sampleRate * dur);
+  var buf = c.createBuffer(1, len, c.sampleRate); var data = buf.getChannelData(0);
+  for (var i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  var src = c.createBufferSource(); src.buffer = buf;
+  var g = c.createGain(); g.gain.setValueAtTime(vol || 0.3, c.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
+  var f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900;
+  src.connect(f); f.connect(g); g.connect(c.destination); src.start(c.currentTime);
+}
+function playSound(name) {
+  try {
+    if (name === 'coin') { tone(880, 0.09, 'square', 0.15); tone(1320, 0.18, 'square', 0.15, undefined, 0.08); }
+    else if (name === 'jump') tone(280, 0.25, 'square', 0.2, 620);
+    else if (name === 'click') tone(600, 0.06, 'triangle', 0.2);
+    else if (name === 'boom') { noiseS(0.6, 0.4); tone(120, 0.5, 'sawtooth', 0.25, 40); }
+    else if (name === 'win') { tone(523, 0.12, 'square', 0.18); tone(659, 0.12, 'square', 0.18, undefined, 0.12); tone(784, 0.12, 'square', 0.18, undefined, 0.24); tone(1046, 0.4, 'square', 0.18, undefined, 0.36); }
+    else if (name === 'lose') { tone(392, 0.2, 'sawtooth', 0.2); tone(311, 0.2, 'sawtooth', 0.2, undefined, 0.2); tone(233, 0.5, 'sawtooth', 0.2, undefined, 0.4); }
+  } catch (e) {}
+}
 function runChain(actions) {
   actions.forEach(function (n) {
     var d = n.data;
@@ -237,6 +268,7 @@ function runChain(actions) {
       if (m2 && m2.material) m2.material.diffuseColor = BABYLON.Color3.FromHexString(d.color || '#ffcc00');
     }
     else if (d.type === 'sink') { sinkTarget[d.objectId] = 1; }
+    else if (d.type === 'float') { sinkTarget[d.objectId] = 0; }
     else if (d.type === 'float') { sinkTarget[d.objectId] = 0; }
   });
 }
