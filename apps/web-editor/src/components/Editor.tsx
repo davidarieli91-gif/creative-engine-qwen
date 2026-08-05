@@ -4,10 +4,18 @@ import { SceneHierarchy } from './SceneHierarchy'
 import { Inspector } from './Inspector'
 import { Toolbar, GizmoMode } from './Toolbar'
 import { LogicEditor } from './LogicEditor'
+import { TerrainPanel } from './TerrainPanel'
 import { Wizard } from './Wizard'
 import { LogicData } from '../logic'
 import { WizardConfig, generateProject } from '../wizard'
 import { exportGameHtml } from '../exporter'
+import {
+  TerrainTool,
+  makeHeights,
+  makeColors,
+  generateHills,
+  sampleHeight
+} from '../terrain'
 
 export interface Vector3D {
   x: number
@@ -28,15 +36,23 @@ export interface ObjectBehaviors {
   player: boolean
 }
 
+export interface TerrainObjectData {
+  sub: number
+  size: number
+  heights: number[]
+  colors: number[]
+}
+
 export interface SceneObject {
   id: string
   name: string
-  type: 'cube' | 'sphere' | 'cylinder' | 'plane'
+  type: 'cube' | 'sphere' | 'cylinder' | 'plane' | 'terrain'
   position: Vector3D
   rotation: Vector3D
   scale: Vector3D
   color: ColorRGB
   behaviors: ObjectBehaviors
+  terrain?: TerrainObjectData
 }
 
 interface SavedProject {
@@ -45,6 +61,16 @@ interface SavedProject {
 }
 
 const STORAGE_KEY = 'creative-engine-qwen-scene'
+const round2 = (v: number) => Math.round(v * 100) / 100
+
+function hexToRgb(h: string): ColorRGB {
+  const s = h.replace('#', '')
+  return {
+    r: parseInt(s.slice(0, 2), 16) / 255,
+    g: parseInt(s.slice(2, 4), 16) / 255,
+    b: parseInt(s.slice(4, 6), 16) / 255
+  }
+}
 
 function loadSavedProject(): SavedProject {
   try {
@@ -75,9 +101,16 @@ export function Editor() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('position')
   const [logicOpen, setLogicOpen] = useState(false)
+  const [terrainOpen, setTerrainOpen] = useState(false)
   const [wizardOpen, setWizardOpen] = useState(initialRef.current.objects.length === 0)
   const [hud, setHud] = useState({ score: 0, message: '' })
+  const [terrainTool, setTerrainTool] = useState<TerrainTool>('raise')
+  const [brushRadius, setBrushRadius] = useState(4)
+  const [brushStrength, setBrushStrength] = useState(0.4)
+  const [paintColor, setPaintColor] = useState('#5da345')
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const terrain = objects.find((o) => o.type === 'terrain') ?? null
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ objects, logic }))
@@ -100,7 +133,7 @@ export function Editor() {
   }
 
   const addObject = (type: SceneObject['type']) => {
-    if (isPlaying) return
+    if (isPlaying || type === 'terrain') return
     const index = objects.length
     const yOffset = type === 'plane' ? 0 : 0.5
     const newObject: SceneObject = {
@@ -174,6 +207,102 @@ export function Editor() {
     reader.readAsText(file)
   }
 
+  const createTerrain = (sub: number, size: number) => {
+    if (isPlaying) return
+    const t: SceneObject = {
+      id: 'terrain_' + Date.now(),
+      name: 'Terrain',
+      type: 'terrain',
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      color: { r: 1, g: 1, b: 1 },
+      behaviors: { spin: false, bounce: false, patrol: false, player: false },
+      terrain: {
+        sub,
+        size,
+        heights: Array.from(makeHeights(sub)),
+        colors: Array.from(makeColors(sub), round2)
+      }
+    }
+    setObjects([...objects.filter((o) => o.type !== 'terrain'), t])
+  }
+
+  const genHills = () => {
+    if (!terrain?.terrain || isPlaying) return
+    const { sub, size } = terrain.terrain
+    const h = Float32Array.from(terrain.terrain.heights)
+    generateHills(h, sub, size, 4, Math.random() * 100)
+    const updated: SceneObject = {
+      ...terrain,
+      terrain: { ...terrain.terrain, heights: Array.from(h, round2) }
+    }
+    setObjects(objects.map((o) => (o.id === terrain.id ? updated : o)))
+  }
+
+  const scatter = (kind: 'trees' | 'rocks') => {
+    if (!terrain?.terrain || isPlaying) return
+    const { sub, size, heights } = terrain.terrain
+    const hf = Float32Array.from(heights)
+    const add: SceneObject[] = []
+    const count = kind === 'trees' ? 15 : 10
+    const stamp = Date.now()
+    for (let i = 0; i < count; i++) {
+      const x = round2((Math.random() - 0.5) * size * 0.9)
+      const z = round2((Math.random() - 0.5) * size * 0.9)
+      const y = round2(sampleHeight(hf, sub, size, x, z))
+      if (kind === 'trees') {
+        add.push({
+          id: `${stamp}_t${i}`,
+          name: `Tree_${i + 1}`,
+          type: 'cylinder',
+          position: { x, y: round2(y + 0.5), z },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 0.3, y: 1, z: 0.3 },
+          color: hexToRgb('#6d4c41'),
+          behaviors: { spin: false, bounce: false, patrol: false, player: false }
+        })
+        add.push({
+          id: `${stamp}_l${i}`,
+          name: `Leaves_${i + 1}`,
+          type: 'sphere',
+          position: { x, y: round2(y + 1.5), z },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1.2, y: 1.2, z: 1.2 },
+          color: hexToRgb('#66bb6a'),
+          behaviors: { spin: false, bounce: false, patrol: false, player: false }
+        })
+      } else {
+        const s = round2(0.5 + Math.random())
+        add.push({
+          id: `${stamp}_r${i}`,
+          name: `Rock_${i + 1}`,
+          type: 'cube',
+          position: { x, y: round2(y + s / 2), z },
+          rotation: { x: 0, y: round2(Math.random() * 40), z: 0 },
+          scale: { x: s, y: s, z: s },
+          color: hexToRgb('#90a4ae'),
+          behaviors: { spin: false, bounce: false, patrol: false, player: false }
+        })
+      }
+    }
+    setObjects([...objects, ...add])
+  }
+
+  const deleteTerrain = () => {
+    if (!terrain) return
+    setObjects(objects.filter((o) => o.type !== 'terrain'))
+  }
+
+  const commitTerrain = (heights: number[], colors: number[]) => {
+    if (!terrain?.terrain) return
+    const updated: SceneObject = {
+      ...terrain,
+      terrain: { ...terrain.terrain, heights, colors }
+    }
+    setObjects(objects.map((o) => (o.id === terrain.id ? updated : o)))
+  }
+
   return (
     <div className="editor-container">
       <Toolbar
@@ -237,6 +366,11 @@ export function Editor() {
             gizmoMode={gizmoMode}
             logic={logic}
             onHud={setHud}
+            terrainTool={terrainOpen && terrain && !isPlaying ? terrainTool : null}
+            brushRadius={brushRadius}
+            brushStrength={brushStrength}
+            paintColor={paintColor}
+            onCommitTerrain={commitTerrain}
           />
 
           {isPlaying && (
@@ -275,18 +409,28 @@ export function Editor() {
             </div>
           )}
 
-          <button
-            className="btn"
-            style={{
-              position: 'absolute',
-              bottom: 10,
-              left: 10,
-              background: logicOpen ? '#0e639c' : '#3e3e42'
-            }}
-            onClick={() => setLogicOpen(!logicOpen)}
-          >
-            🧩 Logic
-          </button>
+          <div style={{ position: 'absolute', bottom: 10, left: 10, display: 'flex', gap: 6 }}>
+            <button
+              className="btn"
+              style={{ background: logicOpen ? '#0e639c' : '#3e3e42' }}
+              onClick={() => {
+                setLogicOpen(!logicOpen)
+                setTerrainOpen(false)
+              }}
+            >
+              🧩 Logic
+            </button>
+            <button
+              className="btn"
+              style={{ background: terrainOpen ? '#0e639c' : '#3e3e42' }}
+              onClick={() => {
+                setTerrainOpen(!terrainOpen)
+                setLogicOpen(false)
+              }}
+            >
+              ⛰ Terrain
+            </button>
+          </div>
         </div>
 
         <div
@@ -315,6 +459,26 @@ export function Editor() {
       {logicOpen && (
         <div style={{ height: 320, borderTop: '1px solid #3e3e42', background: '#1e1e1e' }}>
           <LogicEditor logic={logic} objects={objects} onChange={setLogic} />
+        </div>
+      )}
+
+      {terrainOpen && (
+        <div style={{ borderTop: '1px solid #3e3e42', background: '#252526' }}>
+          <TerrainPanel
+            terrain={terrain}
+            tool={terrainTool}
+            onTool={setTerrainTool}
+            radius={brushRadius}
+            onRadius={setBrushRadius}
+            strength={brushStrength}
+            onStrength={setBrushStrength}
+            paintColor={paintColor}
+            onPaintColor={setPaintColor}
+            onCreate={createTerrain}
+            onHills={genHills}
+            onScatter={scatter}
+            onDelete={deleteTerrain}
+          />
         </div>
       )}
 
