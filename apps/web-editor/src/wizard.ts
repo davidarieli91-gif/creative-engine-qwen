@@ -1,4 +1,5 @@
 import { LogicData, LogicNode, LogicNodeData } from './logic'
+import { makeHeights, makeColors, generateHills, sampleHeight } from './terrain'
 
 export interface WizardConfig {
   kind: 'game' | 'scene'
@@ -9,12 +10,13 @@ export interface WizardConfig {
 interface GenObject {
   id: string
   name: string
-  type: 'cube' | 'sphere' | 'cylinder' | 'plane'
+  type: 'cube' | 'sphere' | 'cylinder' | 'plane' | 'terrain'
   position: { x: number; y: number; z: number }
   rotation: { x: number; y: number; z: number }
   scale: { x: number; y: number; z: number }
   color: { r: number; g: number; b: number }
   behaviors: { spin: boolean; bounce: boolean; patrol: boolean; player: boolean }
+  terrain?: { sub: number; size: number; heights: number[]; colors: number[] }
 }
 
 function hex(h: string): { r: number; g: number; b: number } {
@@ -71,6 +73,32 @@ export function generateProject(cfg: WizardConfig): { objects: GenObject[]; logi
   const counts = { small: 5, medium: 8, large: 12 }
   const decorCounts = { small: 6, medium: 12, large: 20 }
 
+  let terrainHeights: Float32Array | null = null
+  let terrainSub = 0
+  let terrainSize = 0
+
+  const addTerrain = (amp: number) => {
+    terrainSub = 96
+    terrainSize = 60
+    terrainHeights = makeHeights(terrainSub)
+    generateHills(terrainHeights, terrainSub, terrainSize, amp, 7)
+    add({
+      type: 'terrain',
+      name: 'Terrain',
+      terrain: {
+        sub: terrainSub,
+        size: terrainSize,
+        heights: Array.from(terrainHeights, (v) => Math.round(v * 100) / 100),
+        colors: Array.from(makeColors(terrainSub), (v) => Math.round(v * 100) / 100)
+      }
+    })
+  }
+
+  const groundY = (x: number, z: number, fallback: number) => {
+    if (terrainHeights) return sampleHeight(terrainHeights, terrainSub, terrainSize, x, z)
+    return fallback
+  }
+
   let player: GenObject | null = null
   if (cfg.kind === 'game') {
     player = add({
@@ -88,17 +116,19 @@ export function generateProject(cfg: WizardConfig): { objects: GenObject[]; logi
     for (let i = 0; i < count; i++) {
       const x = (rnd() - 0.5) * 22
       const z = (rnd() - 0.5) * 22
+      const y = groundY(x, z, 0)
       if (rnd() > 0.4) {
-        add({ type: 'cylinder', name: `Tree_${i + 1}`, color: hex('#6d4c41'), position: { x, y: 0.5, z }, scale: { x: 0.3, y: 1, z: 0.3 } })
-        add({ type: 'sphere', name: `Leaves_${i + 1}`, color: hex('#66bb6a'), position: { x, y: 1.5, z }, scale: { x: 1.2, y: 1.2, z: 1.2 } })
+        add({ type: 'cylinder', name: `Tree_${i + 1}`, color: hex('#6d4c41'), position: { x, y: y + 0.5, z }, scale: { x: 0.3, y: 1, z: 0.3 } })
+        add({ type: 'sphere', name: `Leaves_${i + 1}`, color: hex('#66bb6a'), position: { x, y: y + 1.5, z }, scale: { x: 1.2, y: 1.2, z: 1.2 } })
       } else {
         const s = 0.5 + rnd()
-        add({ type: 'cube', name: `Rock_${i + 1}`, color: hex('#90a4ae'), position: { x, y: s / 2, z }, scale: { x: s, y: s, z: s } })
+        add({ type: 'cube', name: `Rock_${i + 1}`, color: hex('#90a4ae'), position: { x, y: y + s / 2, z }, scale: { x: s, y: s, z: s } })
       }
     }
   }
 
   if (cfg.kind === 'scene') {
+    addTerrain(4)
     addDecor()
     return { objects, logic: { nodes: [], edges: [] } }
   }
@@ -202,8 +232,10 @@ export function generateProject(cfg: WizardConfig): { objects: GenObject[]; logi
   }
 
   if (cfg.genre === 'explore') {
+    addTerrain(4)
+    if (player) player.position = { x: 0, y: 1, z: 6 }
     const start = node({ kind: 'event', type: 'start' }, 40, 40)
-    const hello = node({ kind: 'action', type: 'text', message: 'Исследуй мир! 🌍' }, 300, 40)
+    const hello = node({ kind: 'action', type: 'text', message: 'Исследуй горы! 🏔' }, 300, 40)
     link(start, hello)
     addDecor()
   }
