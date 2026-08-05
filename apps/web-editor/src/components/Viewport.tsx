@@ -19,6 +19,13 @@ import {
 import { SceneObject } from './Editor'
 import { GizmoMode } from './Toolbar'
 import { LogicData, LogicNode, buildChains } from '../logic'
+import {
+  TerrainTool,
+  applyBrush,
+  createTerrainMesh,
+  updateTerrainMesh,
+  sampleHeight
+} from '../terrain'
 
 interface ViewportProps {
   objects: SceneObject[]
@@ -29,6 +36,11 @@ interface ViewportProps {
   gizmoMode: GizmoMode
   logic: LogicData
   onHud: (h: { score: number; message: string }) => void
+  terrainTool: TerrainTool | null
+  brushRadius: number
+  brushStrength: number
+  paintColor: string
+  onCommitTerrain: (heights: number[], colors: number[]) => void
 }
 
 const rad = (d: number) => (d * Math.PI) / 180
@@ -44,12 +56,26 @@ function quatToEuler(q: Quaternion): { x: number; y: number; z: number } {
   return { x: round2(deg(e.x)), y: round2(deg(e.y)), z: round2(deg(e.z)) }
 }
 
-export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlaying, gizmoMode, logic, onHud }: ViewportProps) {
+interface TerrainWork {
+  id: string
+  sub: number
+  size: number
+  heights: Float32Array
+  colors: Float32Array
+  srcH: number[]
+  srcC: number[]
+}
+
+export function Viewport(props: ViewportProps) {
+  const { objects, selectedObject, onSelect, onUpdate, isPlaying, gizmoMode, logic, onHud } = props
+
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<Scene | null>(null)
   const cameraRef = useRef<ArcRotateCamera | null>(null)
   const gizmoRef = useRef<GizmoManager | null>(null)
+  const groundRef = useRef<Mesh | null>(null)
   const meshesRef = useRef<Map<string, Mesh>>(new Map())
+  const terrainWorkRef = useRef<TerrainWork | null>(null)
   const objectsRef = useRef<SceneObject[]>(objects)
   const selectedRef = useRef<SceneObject | null>(selectedObject)
   const onSelectRef = useRef(onSelect)
@@ -66,30 +92,30 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
   const timerAccRef = useRef<Map<string, number>>(new Map())
   const scoreRef = useRef(0)
   const runtimeHiddenRef = useRef<Set<string>>(new Set())
+  const toolRef = useRef<TerrainTool | null>(props.terrainTool)
+  const radiusRef = useRef(props.brushRadius)
+  const strengthRef = useRef(props.brushStrength)
+  const paintRef = useRef(props.paintColor)
+  const commitTerrainRef = useRef(props.onCommitTerrain)
+
+  useEffect(() => { objectsRef.current = objects }, [objects])
+  useEffect(() => { onSelectRef.current = onSelect }, [onSelect])
+  useEffect(() => { onUpdateRef.current = onUpdate }, [onUpdate])
+  useEffect(() => { selectedRef.current = selectedObject }, [selectedObject])
+  useEffect(() => { logicRef.current = logic }, [logic])
+  useEffect(() => { onHudRef.current = onHud }, [onHud])
+  useEffect(() => { toolRef.current = props.terrainTool }, [props.terrainTool])
+  useEffect(() => { radiusRef.current = props.brushRadius }, [props.brushRadius])
+  useEffect(() => { strengthRef.current = props.brushStrength }, [props.brushStrength])
+  useEffect(() => { paintRef.current = props.paintColor }, [props.paintColor])
+  useEffect(() => { commitTerrainRef.current = props.onCommitTerrain }, [props.onCommitTerrain])
 
   useEffect(() => {
-    objectsRef.current = objects
-  }, [objects])
-
-  useEffect(() => {
-    onSelectRef.current = onSelect
-  }, [onSelect])
-
-  useEffect(() => {
-    onUpdateRef.current = onUpdate
-  }, [onUpdate])
-
-  useEffect(() => {
-    selectedRef.current = selectedObject
-  }, [selectedObject])
-
-  useEffect(() => {
-    logicRef.current = logic
-  }, [logic])
-
-  useEffect(() => {
-    onHudRef.current = onHud
-  }, [onHud])
+    const cam = cameraRef.current
+    if (cam && cam.inputs && (cam.inputs as any).attached && (cam.inputs as any).attached.mouse) {
+      ;(cam.inputs as any).attached.mouse.buttons = props.terrainTool ? [2] : [0]
+    }
+  }, [props.terrainTool])
 
   const runChain = (actions: LogicNode[]) => {
     actions.forEach((node) => {
@@ -126,9 +152,7 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
     })
   }
   const runChainRef = useRef(runChain)
-  useEffect(() => {
-    runChainRef.current = runChain
-  })
+  useEffect(() => { runChainRef.current = runChain })
 
   useEffect(() => {
     isPlayingRef.current = isPlaying
@@ -152,6 +176,7 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
       })
       runtimeHiddenRef.current.clear()
       objectsRef.current.forEach((obj) => {
+        if (obj.type === 'terrain') return
         const mesh = meshesRef.current.get(obj.id)
         if (!mesh) return
         mesh.position.set(obj.position.x, obj.position.y, obj.position.z)
@@ -192,6 +217,7 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
     const groundMaterial = new StandardMaterial('groundMaterial', scene)
     groundMaterial.diffuseColor = new Color3(0.25, 0.28, 0.25)
     ground.material = groundMaterial
+    groundRef.current = ground
 
     const gizmoManager = new GizmoManager(scene)
     gizmoManager.boundingBoxGizmoEnabled = false
@@ -211,6 +237,69 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
 
+    let sculpting = false
+    let flattenY = 0
+
+    const doPick = (e: PointerEvent) => {
+      const canvas = canvasRef.current
+      const sc = sceneRef.current
+      const w = terrainWorkRef.current
+      if (!canvas || !sc || !w) return null
+      const rect = canvas.getBoundingClientRect()
+      const pick = sc.pick(e.clientX - rect.left, e.clientY - rect.top)
+      if (!pick || !pick.hit || !pick.pickedMesh || pick.pickedMesh.id !== w.id) return null
+      return pick.pickedPoint
+    }
+
+    const sculptAt = (p: Vector3) => {
+      const w = terrainWorkRef.current
+      const tool = toolRef.current
+      if (!w || !tool) return
+      applyBrush(
+        w.heights,
+        w.colors,
+        w.sub,
+        w.size,
+        p.x,
+        p.z,
+        radiusRef.current,
+        tool === 'raise' || tool === 'lower' ? strengthRef.current * 0.3 : strengthRef.current,
+        tool,
+        Color3.FromHexString(paintRef.current),
+        flattenY
+      )
+      const mesh = meshesRef.current.get(w.id)
+      if (mesh) updateTerrainMesh(mesh, w.sub, w.size, w.heights, w.colors)
+    }
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (!toolRef.current || isPlayingRef.current || e.button !== 0) return
+      const p = doPick(e)
+      if (!p) return
+      sculpting = true
+      flattenY = p.y
+      sculptAt(p)
+    }
+    const onPointerMove = (e: PointerEvent) => {
+      if (!sculpting) return
+      const p = doPick(e)
+      if (p) sculptAt(p)
+    }
+    const onPointerUp = () => {
+      if (!sculpting) return
+      sculpting = false
+      const w = terrainWorkRef.current
+      if (w) {
+        commitTerrainRef.current(
+          Array.from(w.heights, round2),
+          Array.from(w.colors, round2)
+        )
+      }
+    }
+    canvasRef.current.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+
     const resizeObserver = new ResizeObserver(() => engine.resize())
     if (canvasRef.current.parentElement) resizeObserver.observe(canvasRef.current.parentElement)
 
@@ -221,6 +310,7 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
         lastTsRef.current = now
         const t = (now - playStartRef.current) / 1000
 
+        const w = terrainWorkRef.current
         const playerObj = objectsRef.current.find((o) => o.behaviors?.player)
         if (playerObj) {
           const playerMesh = meshesRef.current.get(playerObj.id)
@@ -246,12 +336,20 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
                 0
               )
             }
+            if (w && !playerObj.behaviors?.bounce) {
+              const half = w.size / 2
+              if (Math.abs(playerMesh.position.x) < half && Math.abs(playerMesh.position.z) < half) {
+                playerMesh.position.y =
+                  sampleHeight(w.heights, w.sub, w.size, playerMesh.position.x, playerMesh.position.z) + 0.5
+              }
+            }
             camera.target.copyFrom(playerMesh.position)
             camera.target.y += 0.5
           }
         }
 
         objectsRef.current.forEach((obj) => {
+          if (obj.type === 'terrain') return
           const mesh = meshesRef.current.get(obj.id)
           if (!mesh || !mesh.isEnabled()) return
           const b = obj.behaviors
@@ -302,12 +400,17 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      canvasRef.current?.removeEventListener('pointerdown', onPointerDown)
       resizeObserver.disconnect()
       gizmoManager.dispose()
       engine.dispose()
       sceneRef.current = null
       cameraRef.current = null
       gizmoRef.current = null
+      groundRef.current = null
+      terrainWorkRef.current = null
       meshesRef.current.clear()
     }
   }, [])
@@ -326,6 +429,8 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
     })
 
     objects.forEach((obj) => {
+      if (obj.type === 'terrain') return
+
       let mesh = meshesRef.current.get(obj.id)
 
       if (!mesh) {
@@ -377,13 +482,43 @@ export function Viewport({ objects, selectedObject, onSelect, onUpdate, isPlayin
       mat.emissiveColor =
         selectedObject?.id === obj.id ? new Color3(0.25, 0.08, 0.08) : Color3.Black()
     })
+
+    const tObj = objects.find((o) => o.type === 'terrain')
+    if (groundRef.current) groundRef.current.setEnabled(!tObj)
+
+    if (tObj && tObj.terrain) {
+      const td = tObj.terrain
+      const w = terrainWorkRef.current
+      if (!w || w.id !== tObj.id || w.srcH !== td.heights || w.srcC !== td.colors) {
+        const heights = Float32Array.from(td.heights)
+        const colors = Float32Array.from(td.colors)
+        let mesh = meshesRef.current.get(tObj.id)
+        if (!mesh) {
+          mesh = createTerrainMesh(scene, tObj.id, td.sub, td.size, heights, colors)
+          meshesRef.current.set(tObj.id, mesh)
+        } else {
+          updateTerrainMesh(mesh, td.sub, td.size, heights, colors)
+        }
+        terrainWorkRef.current = {
+          id: tObj.id,
+          sub: td.sub,
+          size: td.size,
+          heights,
+          colors,
+          srcH: td.heights,
+          srcC: td.colors
+        }
+      }
+    } else if (terrainWorkRef.current) {
+      terrainWorkRef.current = null
+    }
   }, [objects, selectedObject])
 
   useEffect(() => {
     const gm = gizmoRef.current
     if (!gm) return
 
-    if (isPlaying || !selectedObject) {
+    if (isPlaying || !selectedObject || selectedObject.type === 'terrain') {
       gm.attachToMesh(null)
       return
     }
