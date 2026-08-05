@@ -31,7 +31,7 @@ var DATA = ${data};
 var canvas = document.getElementById('c');
 var engine = new BABYLON.Engine(canvas, true);
 var scene = new BABYLON.Scene(engine);
-scene.clearColor = BABYLON.Color4(0.07, 0.07, 0.12, 1);
+scene.clearColor = new BABYLON.Color4(0.07, 0.07, 0.12, 1);
 var camera = new BABYLON.ArcRotateCamera('cam', Math.PI / 2, Math.PI / 3, 12, new BABYLON.Vector3(0, 0.5, 0), scene);
 camera.attachControl(canvas, true);
 camera.wheelPrecision = 20;
