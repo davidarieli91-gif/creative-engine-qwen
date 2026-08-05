@@ -206,7 +206,8 @@ export function updateTerrainMesh(
   colors: Float32Array
 ) {
   const geo = buildTerrainGeometry(sub, size, heights, colors)
-  mesh.updateVerticesData(VertexData.PositionKind, geo.positions)
-  mesh.updateVerticesData(VertexData.NormalKind, geo.normals)
-  mesh.updateVerticesData(VertexData.ColorKind, geo.colors)
+  mesh.setVerticesData(VertexData.PositionKind, geo.positions, false)
+  mesh.setVerticesData(VertexData.NormalKind, geo.normals, false)
+  mesh.setVerticesData(VertexData.ColorKind, geo.colors, false)
+  mesh.refreshBoundingInfo()
 }
