@@ -6,6 +6,7 @@ import { Toolbar, GizmoMode } from './Toolbar'
 import { LogicEditor } from './LogicEditor'
 import { TerrainPanel } from './TerrainPanel'
 import { Wizard } from './Wizard'
+import { FlyCam } from './FlyCam'
 import { LogicData } from '../logic'
 import { WizardConfig, generateProject } from '../wizard'
 import { exportGameHtml } from '../exporter'
@@ -423,7 +424,8 @@ export function Editor() {
               {hud.message}
             </div>
           )}
-
+          
+          <FlyCam isPlaying={isPlaying} />
           <div style={{ position: 'absolute', bottom: 10, left: 10, display: 'flex', gap: 6 }}>
             <button className="btn" style={{ background: logicOpen ? '#0e639c' : '#3e3e42' }}
               onClick={() => { setLogicOpen(!logicOpen); setTerrainOpen(false); setWaterOpen(false) }}>
