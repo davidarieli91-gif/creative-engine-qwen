@@ -34,6 +34,7 @@ export interface ObjectBehaviors {
   bounce: boolean
   patrol: boolean
   player: boolean
+  float: boolean
 }
 
 export interface TerrainObjectData {
@@ -43,16 +44,25 @@ export interface TerrainObjectData {
   colors: number[]
 }
 
+export interface WaterObjectData {
+  level: number
+  size: number
+  waveHeight: number
+  waveSpeed: number
+  color: string
+}
+
 export interface SceneObject {
   id: string
   name: string
-  type: 'cube' | 'sphere' | 'cylinder' | 'plane' | 'terrain'
+  type: 'cube' | 'sphere' | 'cylinder' | 'plane' | 'terrain' | 'water'
   position: Vector3D
   rotation: Vector3D
   scale: Vector3D
   color: ColorRGB
   behaviors: ObjectBehaviors
   terrain?: TerrainObjectData
+  water?: WaterObjectData
 }
 
 interface SavedProject {
@@ -84,7 +94,7 @@ function loadSavedProject(): SavedProject {
       }
     }
   } catch {
-    // игнорируем повреждённые данные
+    // ignore
   }
   return { objects: [], logic: { nodes: [], edges: [] } }
 }
@@ -102,6 +112,7 @@ export function Editor() {
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('position')
   const [logicOpen, setLogicOpen] = useState(false)
   const [terrainOpen, setTerrainOpen] = useState(false)
+  const [waterOpen, setWaterOpen] = useState(false)
   const [wizardOpen, setWizardOpen] = useState(initialRef.current.objects.length === 0)
   const [hud, setHud] = useState({ score: 0, message: '' })
   const [terrainTool, setTerrainTool] = useState<TerrainTool>('raise')
@@ -111,6 +122,7 @@ export function Editor() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const terrain = objects.find((o) => o.type === 'terrain') ?? null
+  const water = objects.find((o) => o.type === 'water') ?? null
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ objects, logic }))
@@ -133,7 +145,7 @@ export function Editor() {
   }
 
   const addObject = (type: SceneObject['type']) => {
-    if (isPlaying || type === 'terrain') return
+    if (isPlaying || type === 'terrain' || type === 'water') return
     const index = objects.length
     const yOffset = type === 'plane' ? 0 : 0.5
     const newObject: SceneObject = {
@@ -144,7 +156,7 @@ export function Editor() {
       rotation: { x: 0, y: 0, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
       color: { r: 0.2, g: 0.5, b: 0.8 },
-      behaviors: { spin: false, bounce: false, patrol: false, player: false }
+      behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false }
     }
     setObjects([...objects, newObject])
     setSelectedObject(newObject)
@@ -217,7 +229,7 @@ export function Editor() {
       rotation: { x: 0, y: 0, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
       color: { r: 1, g: 1, b: 1 },
-      behaviors: { spin: false, bounce: false, patrol: false, player: false },
+      behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false },
       terrain: {
         sub,
         size,
@@ -253,36 +265,24 @@ export function Editor() {
       const y = round2(sampleHeight(hf, sub, size, x, z))
       if (kind === 'trees') {
         add.push({
-          id: `${stamp}_t${i}`,
-          name: `Tree_${i + 1}`,
-          type: 'cylinder',
-          position: { x, y: round2(y + 0.5), z },
-          rotation: { x: 0, y: 0, z: 0 },
-          scale: { x: 0.3, y: 1, z: 0.3 },
-          color: hexToRgb('#6d4c41'),
-          behaviors: { spin: false, bounce: false, patrol: false, player: false }
+          id: `${stamp}_t${i}`, name: `Tree_${i + 1}`, type: 'cylinder',
+          position: { x, y: round2(y + 0.5), z }, rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 0.3, y: 1, z: 0.3 }, color: hexToRgb('#6d4c41'),
+          behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false }
         })
         add.push({
-          id: `${stamp}_l${i}`,
-          name: `Leaves_${i + 1}`,
-          type: 'sphere',
-          position: { x, y: round2(y + 1.5), z },
-          rotation: { x: 0, y: 0, z: 0 },
-          scale: { x: 1.2, y: 1.2, z: 1.2 },
-          color: hexToRgb('#66bb6a'),
-          behaviors: { spin: false, bounce: false, patrol: false, player: false }
+          id: `${stamp}_l${i}`, name: `Leaves_${i + 1}`, type: 'sphere',
+          position: { x, y: round2(y + 1.5), z }, rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1.2, y: 1.2, z: 1.2 }, color: hexToRgb('#66bb6a'),
+          behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false }
         })
       } else {
         const s = round2(0.5 + Math.random())
         add.push({
-          id: `${stamp}_r${i}`,
-          name: `Rock_${i + 1}`,
-          type: 'cube',
-          position: { x, y: round2(y + s / 2), z },
-          rotation: { x: 0, y: round2(Math.random() * 40), z: 0 },
-          scale: { x: s, y: s, z: s },
-          color: hexToRgb('#90a4ae'),
-          behaviors: { spin: false, bounce: false, patrol: false, player: false }
+          id: `${stamp}_r${i}`, name: `Rock_${i + 1}`, type: 'cube',
+          position: { x, y: round2(y + s / 2), z }, rotation: { x: 0, y: round2(Math.random() * 40), z: 0 },
+          scale: { x: s, y: s, z: s }, color: hexToRgb('#90a4ae'),
+          behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false }
         })
       }
     }
@@ -301,6 +301,32 @@ export function Editor() {
       terrain: { ...terrain.terrain, heights, colors }
     }
     setObjects(objects.map((o) => (o.id === terrain.id ? updated : o)))
+  }
+
+  const createWater = () => {
+    if (isPlaying) return
+    const w: SceneObject = {
+      id: 'water_' + Date.now(),
+      name: 'Water',
+      type: 'water',
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      color: { r: 0.1, g: 0.3, b: 0.6 },
+      behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false },
+      water: { level: 1, size: 70, waveHeight: 0.35, waveSpeed: 1.2, color: '#1e6fd8' }
+    }
+    setObjects([...objects.filter((o) => o.type !== 'water'), w])
+  }
+
+  const updateWater = (patch: Partial<WaterObjectData>) => {
+    if (!water?.water) return
+    const updated: SceneObject = { ...water, water: { ...water.water, ...patch } }
+    setObjects(objects.map((o) => (o.id === water.id ? updated : o)))
+  }
+
+  const deleteWater = () => {
+    setObjects(objects.filter((o) => o.type !== 'water'))
   }
 
   return (
@@ -338,20 +364,13 @@ export function Editor() {
           className="panel left-panel"
           style={{ width: leftPanelCollapsed ? '40px' : '250px' }}
         >
-          <div
-            className="panel-header"
-            onClick={() => setLeftPanelCollapsed(!leftPanelCollapsed)}
-          >
+          <div className="panel-header" onClick={() => setLeftPanelCollapsed(!leftPanelCollapsed)}>
             <span style={{ display: leftPanelCollapsed ? 'none' : 'inline' }}>Scene</span>
             <span className={`collapse-icon ${leftPanelCollapsed ? 'collapsed' : ''}`}>▼</span>
           </div>
           {!leftPanelCollapsed && (
             <div className="panel-content">
-              <SceneHierarchy
-                objects={objects}
-                selectedObject={selectedObject}
-                onSelect={setSelectedObject}
-              />
+              <SceneHierarchy objects={objects} selectedObject={selectedObject} onSelect={setSelectedObject} />
             </div>
           )}
         </div>
@@ -374,83 +393,41 @@ export function Editor() {
           />
 
           {isPlaying && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 10,
-                left: 12,
-                fontSize: 20,
-                fontWeight: 800,
-                color: '#fff',
-                textShadow: '0 1px 4px #000',
-                pointerEvents: 'none'
-              }}
-            >
+            <div style={{ position: 'absolute', top: 10, left: 12, fontSize: 20, fontWeight: 800, color: '#fff', textShadow: '0 1px 4px #000', pointerEvents: 'none' }}>
               🏆 {hud.score}
             </div>
           )}
 
           {isPlaying && hud.message && (
-            <div
-              style={{
-                position: 'absolute',
-                top: '38%',
-                left: 0,
-                right: 0,
-                textAlign: 'center',
-                fontSize: 30,
-                fontWeight: 800,
-                color: '#ffe08a',
-                textShadow: '0 2px 8px #000',
-                pointerEvents: 'none'
-              }}
-            >
+            <div style={{ position: 'absolute', top: '38%', left: 0, right: 0, textAlign: 'center', fontSize: 30, fontWeight: 800, color: '#ffe08a', textShadow: '0 2px 8px #000', pointerEvents: 'none' }}>
               {hud.message}
             </div>
           )}
 
           <div style={{ position: 'absolute', bottom: 10, left: 10, display: 'flex', gap: 6 }}>
-            <button
-              className="btn"
-              style={{ background: logicOpen ? '#0e639c' : '#3e3e42' }}
-              onClick={() => {
-                setLogicOpen(!logicOpen)
-                setTerrainOpen(false)
-              }}
-            >
+            <button className="btn" style={{ background: logicOpen ? '#0e639c' : '#3e3e42' }}
+              onClick={() => { setLogicOpen(!logicOpen); setTerrainOpen(false); setWaterOpen(false) }}>
               🧩 Logic
             </button>
-            <button
-              className="btn"
-              style={{ background: terrainOpen ? '#0e639c' : '#3e3e42' }}
-              onClick={() => {
-                setTerrainOpen(!terrainOpen)
-                setLogicOpen(false)
-              }}
-            >
+            <button className="btn" style={{ background: terrainOpen ? '#0e639c' : '#3e3e42' }}
+              onClick={() => { setTerrainOpen(!terrainOpen); setLogicOpen(false); setWaterOpen(false) }}>
               ⛰ Terrain
+            </button>
+            <button className="btn" style={{ background: waterOpen ? '#0e639c' : '#3e3e42' }}
+              onClick={() => { setWaterOpen(!waterOpen); setLogicOpen(false); setTerrainOpen(false) }}>
+              🌊 Water
             </button>
           </div>
         </div>
 
-        <div
-          className="panel right-panel"
-          style={{ width: rightPanelCollapsed ? '40px' : '300px' }}
-        >
-          <div
-            className="panel-header"
-            onClick={() => setRightPanelCollapsed(!rightPanelCollapsed)}
-          >
+        <div className="panel right-panel" style={{ width: rightPanelCollapsed ? '40px' : '300px' }}>
+          <div className="panel-header" onClick={() => setRightPanelCollapsed(!rightPanelCollapsed)}>
             <span style={{ display: rightPanelCollapsed ? 'none' : 'inline' }}>Inspector</span>
             <span className={`collapse-icon ${rightPanelCollapsed ? 'collapsed' : ''}`}>▼</span>
           </div>
           {!rightPanelCollapsed && (
             <div className="panel-content">
-              <Inspector
-                object={selectedObject}
-                onUpdate={updateObject}
-                onDelete={deleteObject}
-              />
+              <Inspector object={selectedObject} onUpdate={updateObject} onDelete={deleteObject} />
             </div>
           )}
         </div>
@@ -479,6 +456,46 @@ export function Editor() {
             onScatter={scatter}
             onDelete={deleteTerrain}
           />
+        </div>
+      )}
+
+      {waterOpen && (
+        <div style={{ borderTop: '1px solid #3e3e42', background: '#252526', padding: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+          {!water ? (
+            <>
+              <span style={{ fontWeight: 700 }}>🌊 Вода:</span>
+              <button className="btn" style={{ background: '#16825d' }} onClick={createWater}>🌊 Создать воду</button>
+              <span style={{ color: '#888' }}>Море для кораблей, айсбергов и приключений!</span>
+            </>
+          ) : (
+            <>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                Уровень
+                <input type="range" min={-2} max={8} step={0.1} value={water.water?.level ?? 1}
+                  onChange={(e) => updateWater({ level: parseFloat(e.target.value) })} />
+                {water.water?.level}
+              </label>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                Волны
+                <input type="range" min={0} max={1.5} step={0.05} value={water.water?.waveHeight ?? 0.35}
+                  onChange={(e) => updateWater({ waveHeight: parseFloat(e.target.value) })} />
+                {water.water?.waveHeight}
+              </label>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                Скорость
+                <input type="range" min={0} max={3} step={0.1} value={water.water?.waveSpeed ?? 1.2}
+                  onChange={(e) => updateWater({ waveSpeed: parseFloat(e.target.value) })} />
+                {water.water?.waveSpeed}
+              </label>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                Цвет
+                <input type="color" value={water.water?.color ?? '#1e6fd8'}
+                  onChange={(e) => updateWater({ color: e.target.value })}
+                  style={{ width: 40, height: 26, background: '#1e1e1e', border: '1px solid #3e3e42', borderRadius: 4 }} />
+              </label>
+              <button className="btn btn-danger" onClick={deleteWater}>🗑 Удалить воду</button>
+            </>
+          )}
         </div>
       )}
 
