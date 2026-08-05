@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import {
-  Engine, Scene, ArcRotateCamera, FreeCamera, Vector3, HemisphericLight, DirectionalLight,
+  Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
   MeshBuilder, StandardMaterial, Color3, Color4, ActionManager, ExecuteCodeAction,
   GizmoManager, Quaternion, VertexData, NoiseProceduralTexture, Mesh
 } from '@babylonjs/core'
@@ -14,840 +14,55 @@ import {
 } from '../terrain'
 
 interface ViewportProps {
-  objects: SceneObject[]
-  selectedObject: SceneObject | null
-  onSelect: (obj: SceneObject) => void
-  onUpdate: (obj: SceneObject) => void
-  isPlaying: boolean
-  gizmoMode: GizmoMode
-  logic: LogicData
+  objects: SceneObject[]; selectedObject: SceneObject | null
+  onSelect: (o: SceneObject) => void; onUpdate: (o: SceneObject) => void
+  isPlaying: boolean; gizmoMode: GizmoMode; logic: LogicData
   onHud: (h: { score: number; message: string }) => void
-  terrainTool: TerrainTool | null
-  brushRadius: number
-  brushStrength: number
-  paintId: number
-  onCommitTerrain: (voxels: string, mats: string) => void
+  terrainTool: TerrainTool | null; brushRadius: number; brushStrength: number
+  paintId: number; onCommitTerrain: (v: string, m: string) => void
 }
-
 const rad = (d: number) => (d * Math.PI) / 180
 const deg = (r: number) => (r * 180) / Math.PI
 const round2 = (v: number) => Math.round(v * 100) / 100
-const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
-
-function eulerToQuat(rot: { x: number; y: number; z: number }): Quaternion {
-  return Quaternion.RotationYawPitchRoll(rad(rot.y), rad(rot.x), rad(rot.z))
+function eulerToQuat(r: { x: number; y: number; z: number }): Quaternion { return Quaternion.RotationYawPitchRoll(rad(r.y), rad(r.x), rad(r.z)) }
+function quatToEuler(q: Quaternion) { const e = q.toEulerAngles(); return { x: round2(deg(e.x)), y: round2(deg(e.y)), z: round2(deg(e.z)) } }
+function waveH(x: number, z: number, t: number, a: number, s: number): number {
+  if (a <= 0) return 0
+  return a * (0.5 * Math.sin(x * 0.18 + t * s) + 0.3 * Math.sin(z * 0.23 + t * s * 1.31) + 0.2 * Math.sin((x + z) * 0.11 + t * s * 0.71))
 }
-
-function quatToEuler(q: Quaternion): { x: number; y: number; z: number } {
-  const e = q.toEulerAngles()
-  return { x: round2(deg(e.x)), y: round2(deg(e.y)), z: round2(deg(e.z)) }
-}
-
-function waveH(x: number, z: number, t: number, amp: number, speed: number): number {
-  if (amp <= 0) return 0
-  return (
-    amp *
-    (0.5 * Math.sin(x * 0.18 + t * speed) +
-      0.3 * Math.sin(z * 0.23 + t * speed * 1.31) +
-      0.2 * Math.sin((x + z) * 0.11 + t * speed * 0.71))
-  )
-}
-
-// DDA-обход вокселей лучом по алгоритму Amanatides & Woo (1987),
-// та же техника, что в открытом репозитории DeadlockCode/voxel_ray_traversal (MIT/Apache-2.0)
 interface VoxelHit { x: number; y: number; z: number; nx: number; ny: number; nz: number }
-
-function raycastVoxels(
-  vox: Uint8Array, w: number, h: number, d: number, size: number,
-  o: { x: number; y: number; z: number }, dir: { x: number; y: number; z: number },
-  maxDist: number
-): VoxelHit | null {
-  let dx = dir.x
-  let dy = dir.y
-  let dz = dir.z
-  const len = Math.sqrt(dx * dx + dy * dy + dz * dz)
-  if (len < 1e-9) return null
-  dx /= len
-  dy /= len
-  dz /= len
-
-  let x = Math.floor(o.x / size + w / 2)
-  let y = Math.floor(o.y / size)
-  let z = Math.floor(o.z / size + d / 2)
-
-  const inRange = (a: number, b: number, c: number) => a >= 0 && b >= 0 && c >= 0 && a < w && b < h && c < d
-  if (inRange(x, y, z) && vox[(y * d + z) * w + x]) return { x, y, z, nx: 0, ny: 1, nz: 0 }
-
-  const stepX = dx > 0 ? 1 : -1
-  const stepY = dy > 0 ? 1 : -1
-  const stepZ = dz > 0 ? 1 : -1
-
-  const tDeltaX = dx !== 0 ? Math.abs(size / dx) : Infinity
-  const tDeltaY = dy !== 0 ? Math.abs(size / dy) : Infinity
-  const tDeltaZ = dz !== 0 ? Math.abs(size / dz) : Infinity
-
-  const worldX = (x - w / 2) * size
-  const worldY = y * size
-  const worldZ = (z - d / 2) * size
-
-  let tMaxX = dx !== 0 ? (dx > 0 ? worldX + size - o.x : o.x - worldX) / Math.abs(dx) : Infinity
-  let tMaxY = dy !== 0 ? (dy > 0 ? worldY + size - o.y : o.y - worldY) / Math.abs(dy) : Infinity
-  let tMaxZ = dz !== 0 ? (dz > 0 ? worldZ + size - o.z : o.z - worldZ) / Math.abs(dz) : Infinity
-
-  let nx = 0
-  let ny = 0
-  let nz = 0
-  let t = 0
-
-  while (t <= maxDist) {
-    if (tMaxX < tMaxY && tMaxX < tMaxZ) {
-      x += stepX
-      t = tMaxX
-      tMaxX += tDeltaX
-      nx = -stepX
-      ny = 0
-      nz = 0
-    } else if (tMaxY < tMaxZ) {
-      y += stepY
-      t = tMaxY
-      tMaxY += tDeltaY
-      nx = 0
-      ny = -stepY
-      nz = 0
-    } else {
-      z += stepZ
-      t = tMaxZ
-      tMaxZ += tDeltaZ
-      nx = 0
-      ny = 0
-      nz = -stepZ
-    }
-    if (x < -2 || x > w + 1 || y < -2 || y > h + 1 || z < -2 || z > d + 1) break
-    if (inRange(x, y, z) && vox[(y * d + z) * w + x]) return { x, y, z, nx, ny, nz }
-  }
-  return null
-}
-
-interface TerrainWork {
-  id: string
-  w: number
-  h: number
-  d: number
-  size: number
-  vox: Uint8Array
-  mat: Uint8Array
-  srcV: string
-  srcM: string
-  chunks: Map<string, Mesh>
-}
-
-interface WaterWork {
-  id: string
-  sub: number
-  size: number
-  mesh: Mesh
-  base: Float32Array
-  positions: Float32Array
-  normals: Float32Array
-  indices: number[]
-}
-
-interface FlyState {
-  pos: Vector3
-  yaw: number
-  pitch: number
-  tYaw: number
-  tPitch: number
-  roll: number
-  speed: number
-  keys: Set<string>
-  looking: boolean
-}
-
-export function Viewport(props: ViewportProps) {
-  const { objects, selectedObject, onSelect, onUpdate, isPlaying, gizmoMode, logic, onHud } = props
-
-  const [flyMode, setFlyMode] = useState(false)
-  const [flyCollision, setFlyCollision] = useState(true)
-  const flyModeRef = useRef(flyMode)
-  const flyCollisionRef = useRef(flyCollision)
-
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const sceneRef = useRef<Scene | null>(null)
-  const cameraRef = useRef<ArcRotateCamera | null>(null)
-  const flyCamRef = useRef<FreeCamera | null>(null)
-  const flyRef = useRef<FlyState>({
-    pos: new Vector3(0, 20, -30), yaw: 0, pitch: -0.3, tYaw: 0, tPitch: -0.3, roll: 0,
-    speed: 20, keys: new Set(), looking: false
-  })
-  const gizmoRef = useRef<GizmoManager | null>(null)
-  const groundRef = useRef<Mesh | null>(null)
-  const cursorRef = useRef<Mesh | null>(null)
-  const pointersInputRef = useRef<any>(null)
-  const meshesRef = useRef<Map<string, Mesh>>(new Map())
-  const terrainWorkRef = useRef<TerrainWork | null>(null)
-  const waterWorkRef = useRef<WaterWork | null>(null)
-  const waterDataRef = useRef<{ level: number; waveHeight: number; waveSpeed: number } | null>(null)
-  const floatVelRef = useRef<Map<string, number>>(new Map())
-  const sinkProgRef = useRef<Map<string, number>>(new Map())
-  const sinkTargetRef = useRef<Map<string, number>>(new Map())
-  const objectsRef = useRef<SceneObject[]>(objects)
-  const selectedRef = useRef<SceneObject | null>(selectedObject)
-  const onSelectRef = useRef(onSelect)
-  const onUpdateRef = useRef(onUpdate)
-  const isPlayingRef = useRef(isPlaying)
-  const logicRef = useRef<LogicData>(logic)
-  const onHudRef = useRef(onHud)
-  const keysRef = useRef<Set<string>>(new Set())
-  const playStartRef = useRef(0)
-  const lastTsRef = useRef(0)
-  const lastFlyRef = useRef(0)
-  const lastWaterRef = useRef(0)
-  const gizmoModeRef = useRef<GizmoMode>('position')
-  const chainsRef = useRef<{ event: LogicNode; actions: LogicNode[] }[]>([])
-  const touchFiredRef = useRef<Set<string>>(new Set())
-  const timerAccRef = useRef<Map<string, number>>(new Map())
-  const scoreRef = useRef(0)
-  const runtimeHiddenRef = useRef<Set<string>>(new Set())
-  const toolRef = useRef<TerrainTool | null>(props.terrainTool)
-  const radiusRef = useRef(props.brushRadius)
-  const strengthRef = useRef(props.brushStrength)
-  const paintRef = useRef(props.paintId)
-  const commitTerrainRef = useRef(props.onCommitTerrain)
-
-  useEffect(() => { objectsRef.current = objects }, [objects])
-  useEffect(() => { onSelectRef.current = onSelect }, [onSelect])
-  useEffect(() => { onUpdateRef.current = onUpdate }, [onUpdate])
-  useEffect(() => { selectedRef.current = selectedObject }, [selectedObject])
-  useEffect(() => { logicRef.current = logic }, [logic])
-  useEffect(() => { onHudRef.current = onHud }, [onHud])
-  useEffect(() => { toolRef.current = props.terrainTool }, [props.terrainTool])
-  useEffect(() => { radiusRef.current = props.brushRadius }, [props.brushRadius])
-  useEffect(() => { strengthRef.current = props.brushStrength }, [props.brushStrength])
-  useEffect(() => { paintRef.current = props.paintId }, [props.paintId])
-  useEffect(() => { commitTerrainRef.current = props.onCommitTerrain }, [props.onCommitTerrain])
-
-  useEffect(() => { flyModeRef.current = flyMode }, [flyMode])
-  useEffect(() => { flyCollisionRef.current = flyCollision }, [flyCollision])
-
-  useEffect(() => {
-    const sc = sceneRef.current
-    const orbit = cameraRef.current
-    const fly = flyCamRef.current
-    if (!sc || !orbit || !fly) return
-    if (isPlaying && flyModeRef.current) setFlyMode(false)
-  }, [isPlaying])
-
-  useEffect(() => {
-    const sc = sceneRef.current
-    const orbit = cameraRef.current
-    const fly = flyCamRef.current
-    if (!sc || !orbit || !fly) return
-
-    if (flyMode && !isPlaying) {
-      const f = flyRef.current
-      f.pos = orbit.position.clone()
-      const dir = orbit.target.subtract(orbit.position)
-      const len = dir.length()
-      f.yaw = f.tYaw = Math.atan2(dir.x, dir.z)
-      f.pitch = f.tPitch = Math.asin(clamp(dir.y / (len || 1), -1, 1))
-      f.roll = 0
-      sc.activeCamera = fly
-    } else {
-      const f = flyRef.current
-      const cp = Math.cos(f.pitch)
-      const fwd = new Vector3(Math.sin(f.yaw) * cp, Math.sin(f.pitch), Math.cos(f.yaw) * cp)
-      orbit.position = f.pos.clone()
-      orbit.target = f.pos.add(fwd.scale(12))
-      sc.activeCamera = orbit
-    }
-  }, [flyMode, isPlaying])
-
-  useEffect(() => {
-    if (cursorRef.current) cursorRef.current.setEnabled(!!props.terrainTool && !isPlaying)
-  }, [props.terrainTool, isPlaying])
-
-  useEffect(() => {
-    const cam = cameraRef.current
-    if (!cam) return
-    try {
-      const attached: any = (cam.inputs as any).attached
-      if (props.terrainTool) {
-        if (attached && attached.pointers) {
-          pointersInputRef.current = attached.pointers
-          cam.inputs.remove(attached.pointers)
-        }
-      } else if (pointersInputRef.current) {
-        cam.inputs.add(pointersInputRef.current)
-        pointersInputRef.current = null
-      }
-    } catch {
-      // ignore
-    }
-  }, [props.terrainTool])
-
-  const disposeChunks = (w: TerrainWork) => {
-    w.chunks.forEach((m) => m.dispose())
-    w.chunks.clear()
-  }
-
-  const remeshChunk = (w: TerrainWork, cx: number, cz: number) => {
-    const sc = sceneRef.current
-    if (!sc) return
-    const key = cx + '_' + cz
-    const old = w.chunks.get(key)
-    if (old) old.dispose()
-    const x0 = cx * CHUNK
-    const z0 = cz * CHUNK
-    const x1 = Math.min(w.w, x0 + CHUNK)
-    const z1 = Math.min(w.d, z0 + CHUNK)
-    const geo = buildVoxelGeometryRegion(w.vox, w.mat, w.w, w.h, w.d, w.size, x0, z0, x1, z1)
-    if (geo.indices.length === 0) {
-      w.chunks.delete(key)
-      return
-    }
-    const mesh = createVoxelMesh(sc, w.id + '_c' + key, geo)
-    mesh.isPickable = true
-    w.chunks.set(key, mesh)
-  }
-
-  const remeshAll = (w: TerrainWork) => {
-    disposeChunks(w)
-    const ncx = Math.ceil(w.w / CHUNK)
-    const ncz = Math.ceil(w.d / CHUNK)
-    for (let cz = 0; cz < ncz; cz++) {
-      for (let cx = 0; cx < ncx; cx++) remeshChunk(w, cx, cz)
-    }
-  }
-
-  const remeshRegion = (w: TerrainWork, minx: number, minz: number, maxx: number, maxz: number) => {
-    const cx0 = Math.max(0, Math.floor(minx / CHUNK))
-    const cx1 = Math.min(Math.ceil(w.w / CHUNK) - 1, Math.floor(maxx / CHUNK))
-    const cz0 = Math.max(0, Math.floor(minz / CHUNK))
-    const cz1 = Math.min(Math.ceil(w.d / CHUNK) - 1, Math.floor(maxz / CHUNK))
-    for (let cz = cz0; cz <= cz1; cz++) {
-      for (let cx = cx0; cx <= cx1; cx++) remeshChunk(w, cx, cz)
-    }
-  }
-
-  const runChain = (actions: LogicNode[]) => {
-    actions.forEach((node) => {
-      const d = node.data
-      switch (d.type) {
-        case 'score': {
-          scoreRef.current += typeof d.value === 'number' ? d.value : 1
-          onHudRef.current({ score: scoreRef.current, message: '' })
-          break
-        }
-        case 'text': {
-          onHudRef.current({ score: scoreRef.current, message: d.message || '...' })
-          break
-        }
-        case 'delete': {
-          if (d.objectId) {
-            const m = meshesRef.current.get(d.objectId)
-            if (m) {
-              m.setEnabled(false)
-              runtimeHiddenRef.current.add(d.objectId)
-            }
-          }
-          break
-        }
-        case 'color': {
-          if (d.objectId) {
-            const m = meshesRef.current.get(d.objectId)
-            const mat = m?.material as StandardMaterial | undefined
-            if (mat) mat.diffuseColor = Color3.FromHexString(d.color || '#ffcc00')
-          }
-          break
-        }
-        case 'sink': {
-          if (d.objectId) sinkTargetRef.current.set(d.objectId, 1)
-          break
-        }
-        case 'float': {
-          if (d.objectId) sinkTargetRef.current.set(d.objectId, 0)
-          break
-        }
-      }
-    })
-  }
-  const runChainRef = useRef(runChain)
-  useEffect(() => { runChainRef.current = runChain })
-
-  useEffect(() => {
-    isPlayingRef.current = isPlaying
-    keysRef.current.clear()
-    if (isPlaying) {
-      playStartRef.current = performance.now()
-      lastTsRef.current = performance.now()
-      scoreRef.current = 0
-      touchFiredRef.current.clear()
-      timerAccRef.current.clear()
-      sinkTargetRef.current.clear()
-      sinkProgRef.current.clear()
-      floatVelRef.current.clear()
-      chainsRef.current = buildChains(logicRef.current)
-      chainsRef.current
-        .filter((c) => c.event.data.type === 'start')
-        .forEach((c) => runChainRef.current(c.actions))
-      const active = document.activeElement as HTMLElement | null
-      if (active && typeof active.blur === 'function') active.blur()
-    } else {
-      runtimeHiddenRef.current.forEach((id) => {
-        const m = meshesRef.current.get(id)
-        if (m) m.setEnabled(true)
-      })
-      runtimeHiddenRef.current.clear()
-      objectsRef.current.forEach((obj) => {
-        if (obj.type === 'terrain' || obj.type === 'water') return
-        const mesh = meshesRef.current.get(obj.id)
-        if (!mesh) return
-        mesh.position.set(obj.position.x, obj.position.y, obj.position.z)
-        mesh.rotationQuaternion = eulerToQuat(obj.rotation)
-        const mat = mesh.material as StandardMaterial
-        const col = obj.color ?? { r: 0.2, g: 0.5, b: 0.8 }
-        mat.diffuseColor = new Color3(col.r, col.g, col.b)
-      })
-    }
-  }, [isPlaying])
-
-  useEffect(() => {
-    if (!canvasRef.current) return
-
-    const engine = new Engine(canvasRef.current, true)
-    const scene = new Scene(engine)
-    scene.clearColor = new Color4(0.07, 0.07, 0.12, 1)
-
-    const camera = new ArcRotateCamera('camera', Math.PI / 2, Math.PI / 3, 12, new Vector3(0, 0.5, 0), scene)
-    camera.attachControl(canvasRef.current, true)
-    camera.wheelPrecision = 20
-    cameraRef.current = camera
-
-    const flyCam = new FreeCamera('flyCam', new Vector3(0, 20, -30), scene)
-    flyCam.minZ = 0.1
-    flyCamRef.current = flyCam
-
-    const hemi = new HemisphericLight('hemi', Vector3.Up(), scene)
-    hemi.intensity = 0.5
-    const sun = new DirectionalLight('sun', new Vector3(-1, -2, -1), scene)
-    sun.intensity = 0.8
-
-    const ground = MeshBuilder.CreateGround('ground', { width: 30, height: 30 }, scene)
-    const groundMaterial = new StandardMaterial('groundMaterial', scene)
-    groundMaterial.diffuseColor = new Color3(0.25, 0.28, 0.25)
-    ground.material = groundMaterial
-    groundRef.current = ground
-
-    const cursor = MeshBuilder.CreateSphere('brushCursor', { diameter: 1 }, scene)
-    const cursorMat = new StandardMaterial('cursorMat', scene)
-    cursorMat.emissiveColor = new Color3(1, 0.8, 0.1)
-    cursorMat.alpha = 0.5
-    cursor.material = cursorMat
-    cursor.isPickable = false
-    cursor.setEnabled(false)
-    cursorRef.current = cursor
-
-    const gizmoManager = new GizmoManager(scene)
-    gizmoManager.boundingBoxGizmoEnabled = false
-    gizmoManager.usePointerToAttachGizmos = false
-    gizmoRef.current = gizmoManager
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      flyRef.current.keys.add(e.code)
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyE', 'KeyQ'].includes(e.code)) {
-        e.preventDefault()
-        keysRef.current.add(e.code)
-      }
-    }
-    const onKeyUp = (e: KeyboardEvent) => {
-      flyRef.current.keys.delete(e.code)
-      keysRef.current.delete(e.code)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    window.addEventListener('keyup', onKeyUp)
-
-    const onContextMenu = (e: Event) => e.preventDefault()
-    canvasRef.current.addEventListener('contextmenu', onContextMenu)
-
-    const onFlyDown = (e: PointerEvent) => {
-      if (flyModeRef.current && !isPlayingRef.current && e.button === 2) flyRef.current.looking = true
-    }
-    const onFlyMove = (e: PointerEvent) => {
-      const f = flyRef.current
-      if (!f.looking) return
-      f.tYaw -= e.movementX * 0.0032
-      f.tPitch = clamp(f.tPitch - e.movementY * 0.0032, -1.45, 1.45)
-    }
-    const onFlyUp = (e: PointerEvent) => {
-      if (e.button === 2) flyRef.current.looking = false
-    }
-    const onFlyWheel = (e: WheelEvent) => {
-      if (!flyModeRef.current || isPlayingRef.current) return
-      const f = flyRef.current
-      f.speed = clamp(f.speed * (e.deltaY < 0 ? 1.15 : 0.87), 4, 140)
-    }
-    canvasRef.current.addEventListener('pointerdown', onFlyDown)
-    window.addEventListener('pointermove', onFlyMove)
-    window.addEventListener('pointerup', onFlyUp)
-    canvasRef.current.addEventListener('wheel', onFlyWheel)
-
-    let sculpting = false
-
-    const voxelCenter = (w: TerrainWork, hx: number, hy: number, hz: number) =>
-      new Vector3((hx + 0.5 - w.w / 2) * w.size, (hy + 0.5) * w.size, (hz + 0.5 - w.d / 2) * w.size)
-
-    const getHit = (clientX: number, clientY: number): VoxelHit | null => {
-      const canvas = canvasRef.current
-      const sc = sceneRef.current
-      const w = terrainWorkRef.current
-      if (!canvas || !sc || !w) return null
-      const rect = canvas.getBoundingClientRect()
-      const cx = clientX - rect.left
-      const cy = clientY - rect.top
-
-      const ray = sc.createPickingRay(cx, cy)
-      const dda = raycastVoxels(w.vox, w.w, w.h, w.d, w.size, ray.origin, ray.direction, 1000)
-      if (dda) return dda
-
-      const pick = sc.pick(cx, cy)
-      if (pick && pick.hit && pick.pickedPoint && pick.pickedMesh && pick.pickedMesh.id.startsWith(w.id + '_c')) {
-        const p = pick.pickedPoint
-        let n = new Vector3(0, 1, 0)
-        try {
-          const gn = pick.getNormal(true)
-          if (gn) n = gn
-        } catch {
-          // ignore
-        }
-        const ix = Math.floor((p.x - n.x * 0.01) / w.size + w.w / 2)
-        const iy = Math.floor((p.y - n.y * 0.01) / w.size)
-        const iz = Math.floor((p.z - n.z * 0.01) / w.size + w.d / 2)
-        return {
-          x: ix, y: iy, z: iz,
-          nx: Math.round(n.x), ny: Math.round(n.y), nz: Math.round(n.z)
-        }
-      }
-      return null
-    }
-
-    const updateCursor = (hit: VoxelHit | null) => {
-      const c = cursorRef.current
-      const w = terrainWorkRef.current
-      if (!c || !w) return
-      if (!hit || !toolRef.current || isPlayingRef.current) {
-        c.setEnabled(false)
-        return
-      }
-      c.setEnabled(true)
-      c.position = voxelCenter(w, hit.x, hit.y, hit.z)
-      const s = radiusRef.current * 2
-      c.scaling.set(s, s, s)
-    }
-
-    const sculptHit = (hit: VoxelHit) => {
-      const w = terrainWorkRef.current
-      const tool = toolRef.current
-      if (!w || !tool) return
-      try {
-        let bx = hit.x
-        let by = hit.y
-        let bz = hit.z
-        if (tool === 'raise') {
-          bx += hit.nx
-          by += hit.ny
-          bz += hit.nz
-        }
-        const px = (bx + 0.5 - w.w / 2) * w.size
-        const py = (by + 0.5) * w.size
-        const pz = (bz + 0.5 - w.d / 2) * w.size
-        applyVoxelBrush(
-          w.vox, w.mat, w.w, w.h, w.d, w.size,
-          px, py, pz,
-          radiusRef.current,
-          tool,
-          paintRef.current
-        )
-        const r = radiusRef.current + 1
-        remeshRegion(w, px - r, pz - r, px + r, pz + r)
-      } catch (err) {
-        console.error('[terrain] sculpt error', err)
-      }
-    }
-
-    const onPointerDown = (e: PointerEvent) => {
-      if (!toolRef.current || isPlayingRef.current || e.button !== 0) return
-      if (!terrainWorkRef.current) return
-      const hit = getHit(e.clientX, e.clientY)
-      if (!hit) return
-      sculpting = true
-      sculptHit(hit)
-    }
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (toolRef.current && !isPlayingRef.current) {
-        const hit = getHit(e.clientX, e.clientY)
-        updateCursor(hit)
-        if (sculpting && hit) sculptHit(hit)
-      }
-    }
-
-    const onPointerUp = () => {
-      if (!sculpting) return
-      sculpting = false
-      const w = terrainWorkRef.current
-      if (w) {
-        commitTerrainRef.current(rleEncode(w.vox), rleEncode(w.mat))
-      }
-    }
-
-    canvasRef.current.addEventListener('pointerdown', onPointerDown)
-    window.addEventListener('pointerup', onPointerUp)
-
-    const resizeObserver = new ResizeObserver(() => engine.resize())
-    if (canvasRef.current.parentElement) resizeObserver.observe(canvasRef.current.parentElement)
-
-    engine.runRenderLoop(() => {
-      const nowAll = performance.now()
-      const tAll = nowAll / 1000
-
-      if (flyModeRef.current && !isPlayingRef.current) {
-        const f = flyRef.current
-        const dt = Math.min(0.1, (nowAll - lastFlyRef.current) / 1000)
-        lastFlyRef.current = nowAll
-
-        const k = 1 - Math.exp(-dt * 8)
-        f.yaw += (f.tYaw - f.yaw) * k
-        f.pitch += (f.tPitch - f.pitch) * k
-        const sway = clamp((f.tYaw - f.yaw) * 0.9, -0.18, 0.18)
-        f.roll += (sway - f.roll) * Math.min(1, dt * 5)
-
-        const boost = f.keys.has('ShiftLeft') || f.keys.has('ShiftRight') ? 3 : 1
-        const sp = f.speed * boost * dt
-
-        const cp = Math.cos(f.pitch)
-        const fwd = new Vector3(Math.sin(f.yaw) * cp, Math.sin(f.pitch), Math.cos(f.yaw) * cp)
-        flyCam.position = f.pos.clone()
-        flyCam.setTarget(f.pos.add(fwd))
-        flyCam.rotation.z += f.roll
-
-        const fwdV = flyCam.getForwardRay().direction
-        const rightV = Vector3.Cross(fwdV, Vector3.Up())
-        if (rightV.lengthSquared() > 0.0001) rightV.normalize()
-
-        const move = Vector3.Zero()
-        if (f.keys.has('KeyW') || f.keys.has('ArrowUp')) move.addInPlace(fwdV)
-        if (f.keys.has('KeyS') || f.keys.has('ArrowDown')) move.subtractInPlace(fwdV)
-        if (f.keys.has('KeyD') || f.keys.has('ArrowRight')) move.addInPlace(rightV)
-        if (f.keys.has('KeyA') || f.keys.has('ArrowLeft')) move.subtractInPlace(rightV)
-        if (f.keys.has('KeyE')) move.addInPlace(Vector3.Up())
-        if (f.keys.has('KeyQ')) move.subtractInPlace(Vector3.Up())
-        if (move.lengthSquared() > 0) {
-          move.normalize().scaleInPlace(sp)
-          f.pos.addInPlace(move)
-        }
-
-        if (flyCollisionRef.current) {
-          const tw = terrainWorkRef.current
-          const wd = waterDataRef.current
-          let minY = 1.5
-          if (tw) minY = Math.max(minY, topHeightAt(tw.vox, tw.w, tw.h, tw.d, tw.size, f.pos.x, f.pos.z) + 1.5)
-          if (wd) minY = Math.max(minY, wd.level + 1)
-          if (f.pos.y < minY) f.pos.y += (minY - f.pos.y) * Math.min(1, dt * 10)
-          const half = tw ? (tw.w * tw.size) / 2 + 120 : 200
-          f.pos.x = clamp(f.pos.x, -half, half)
-          f.pos.z = clamp(f.pos.z, -half, half)
-          f.pos.y = clamp(f.pos.y, 0.5, 400)
-        }
-      } else {
-        lastFlyRef.current = nowAll
-      }
-
-      const ww = waterWorkRef.current
-      const wd = waterDataRef.current
-      if (ww && wd && nowAll - lastWaterRef.current > 33) {
-        lastWaterRef.current = nowAll
-        const vcount = ww.positions.length / 3
-        for (let i = 0; i < vcount; i++) {
-          ww.positions[i * 3 + 1] =
-            wd.level + waveH(ww.base[i * 2], ww.base[i * 2 + 1], tAll, wd.waveHeight, wd.waveSpeed)
-        }
-        VertexData.ComputeNormals(ww.positions, ww.indices, ww.normals)
-        ww.mesh.updateVerticesData('position', ww.positions)
-        ww.mesh.updateVerticesData('normal', ww.normals)
-      }
-
-      if (isPlayingRef.current) {
-        const now = performance.now()
-        const dt = Math.min(0.1, (now - lastTsRef.current) / 1000)
-        lastTsRef.current = now
-        const t = (now - playStartRef.current) / 1000
-
-        const tw = terrainWorkRef.current
-        const playerObj = objectsRef.current.find((o) => o.behaviors?.player)
-
-        if (wd) {
-          objectsRef.current.forEach((obj) => {
-            if (obj.type === 'terrain' || obj.type === 'water') return
-            if (!obj.behaviors?.float) return
-            const mesh = meshesRef.current.get(obj.id)
-            if (!mesh || !mesh.isEnabled()) return
-
-            const target = sinkTargetRef.current.get(obj.id) ?? 0
-            const p0 = sinkProgRef.current.get(obj.id) ?? 0
-            const p = p0 + (target - p0) * Math.min(1, dt * 0.4)
-            sinkProgRef.current.set(obj.id, p)
-
-            const x = mesh.position.x
-            const z = mesh.position.z
-            const h = wd.level + waveH(x, z, t, wd.waveHeight, wd.waveSpeed)
-            const targetY = h + obj.scale.y * 0.3 - p * (obj.scale.y * 0.5 + 2.5)
-
-            let vy = floatVelRef.current.get(obj.id) ?? 0
-            vy += (targetY - mesh.position.y) * 8 * dt
-            vy *= Math.max(0, 1 - 2.5 * dt)
-            mesh.position.y += vy
-            floatVelRef.current.set(obj.id, vy)
-
-            if (!obj.behaviors?.player) {
-              const d = 1.5
-              const hx = waveH(x + d, z, t, wd.waveHeight, wd.waveSpeed) - waveH(x - d, z, t, wd.waveHeight, wd.waveSpeed)
-              const hz = waveH(x, z + d, t, wd.waveHeight, wd.waveSpeed) - waveH(x, z - d, t, wd.waveHeight, wd.waveSpeed)
-              mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(0, hz * 0.12, -hx * 0.12)
-            }
-          })
-        }
-
-        if (playerObj) {
-          const playerMesh = meshesRef.current.get(playerObj.id)
-          if (playerMesh && playerMesh.isEnabled()) {
-            const keys = keysRef.current
-            const fwd = camera.target.subtract(camera.position)
-            fwd.y = 0
-            if (fwd.lengthSquared() > 0.0001) fwd.normalize()
-            const right = Vector3.Cross(Vector3.Up(), fwd)
-
-            const move = Vector3.Zero()
-            if (keys.has('KeyW') || keys.has('ArrowUp')) move.addInPlace(fwd)
-            if (keys.has('KeyS') || keys.has('ArrowDown')) move.subtractInPlace(fwd)
-            if (keys.has('KeyD') || keys.has('ArrowRight')) move.addInPlace(right)
-            if (keys.has('KeyA') || keys.has('ArrowLeft')) move.subtractInPlace(right)
-
-            if (move.lengthSquared() > 0) {
-              move.normalize().scaleInPlace(0.12)
-              playerMesh.position.addInPlace(move)
-              if (!playerObj.behaviors?.float) {
-                import { useEffect, useRef, useState } from 'react'
-import {
-  Engine, Scene, ArcRotateCamera, FreeCamera, Vector3, HemisphericLight, DirectionalLight,
-  MeshBuilder, StandardMaterial, Color3, Color4, ActionManager, ExecuteCodeAction,
-  GizmoManager, Quaternion, VertexData, NoiseProceduralTexture, Mesh
-} from '@babylonjs/core'
-import { WaterMaterial } from '@babylonjs/materials'
-import { SceneObject } from './Editor'
-import { GizmoMode } from './Toolbar'
-import { LogicData, LogicNode, buildChains } from '../logic'
-import {
-  TerrainTool, VoxelTerrainData, CHUNK, b64ToBytes, rleDecode, rleEncode,
-  buildVoxelGeometryRegion, createVoxelMesh, applyVoxelBrush, topHeightAt
-} from '../terrain'
-
-interface ViewportProps {
-  objects: SceneObject[]
-  selectedObject: SceneObject | null
-  onSelect: (obj: SceneObject) => void
-  onUpdate: (obj: SceneObject) => void
-  isPlaying: boolean
-  gizmoMode: GizmoMode
-  logic: LogicData
-  onHud: (h: { score: number; message: string }) => void
-  terrainTool: TerrainTool | null
-  brushRadius: number
-  brushStrength: number
-  paintId: number
-  onCommitTerrain: (voxels: string, mats: string) => void
-}
-
-const rad = (d: number) => (d * Math.PI) / 180
-const deg = (r: number) => (r * 180) / Math.PI
-const round2 = (v: number) => Math.round(v * 100) / 100
-const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
-
-function eulerToQuat(rot: { x: number; y: number; z: number }): Quaternion {
-  return Quaternion.RotationYawPitchRoll(rad(rot.y), rad(rot.x), rad(rot.z))
-}
-function quatToEuler(q: Quaternion): { x: number; y: number; z: number } {
-  const e = q.toEulerAngles()
-  return { x: round2(deg(e.x)), y: round2(deg(e.y)), z: round2(deg(e.z)) }
-}
-function waveH(x: number, z: number, t: number, amp: number, speed: number): number {
-  if (amp <= 0) return 0
-  return amp * (0.5 * Math.sin(x * 0.18 + t * speed) + 0.3 * Math.sin(z * 0.23 + t * speed * 1.31) + 0.2 * Math.sin((x + z) * 0.11 + t * speed * 0.71))
-}
-
-// DDA-обход вокселей (Amanatides & Woo 1987, как в DeadlockCode/voxel_ray_traversal, MIT/Apache-2.0)
-interface VoxelHit { x: number; y: number; z: number; nx: number; ny: number; nz: number }
-function raycastVoxels(
-  vox: Uint8Array, w: number, h: number, d: number, size: number,
-  o: { x: number; y: number; z: number }, dir: { x: number; y: number; z: number }, maxDist: number
-): VoxelHit | null {
+function raycastVoxels(vox: Uint8Array, w: number, h: number, d: number, size: number, o: { x: number; y: number; z: number }, dir: { x: number; y: number; z: number }, maxDist: number): VoxelHit | null {
   let dx = dir.x, dy = dir.y, dz = dir.z
   const len = Math.sqrt(dx * dx + dy * dy + dz * dz)
   if (len < 1e-9) return null
   dx /= len; dy /= len; dz /= len
-  let x = Math.floor(o.x / size + w / 2)
-  let y = Math.floor(o.y / size)
-  let z = Math.floor(o.z / size + d / 2)
-  const inRange = (a: number, b: number, c: number) => a >= 0 && b >= 0 && c >= 0 && a < w && b < h && c < d
-  if (inRange(x, y, z) && vox[(y * d + z) * w + x]) return { x, y, z, nx: 0, ny: 1, nz: 0 }
-  const stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1, stepZ = dz > 0 ? 1 : -1
-  const tDeltaX = dx !== 0 ? Math.abs(size / dx) : Infinity
-  const tDeltaY = dy !== 0 ? Math.abs(size / dy) : Infinity
-  const tDeltaZ = dz !== 0 ? Math.abs(size / dz) : Infinity
-  const worldX = (x - w / 2) * size, worldY = y * size, worldZ = (z - d / 2) * size
-  let tMaxX = dx !== 0 ? (dx > 0 ? worldX + size - o.x : o.x - worldX) / Math.abs(dx) : Infinity
-  let tMaxY = dy !== 0 ? (dy > 0 ? worldY + size - o.y : o.y - worldY) / Math.abs(dy) : Infinity
-  let tMaxZ = dz !== 0 ? (dz > 0 ? worldZ + size - o.z : o.z - worldZ) / Math.abs(dz) : Infinity
+  let x = Math.floor(o.x / size + w / 2), y = Math.floor(o.y / size), z = Math.floor(o.z / size + d / 2)
+  const inR = (a: number, b: number, c: number) => a >= 0 && b >= 0 && c >= 0 && a < w && b < h && c < d
+  if (inR(x, y, z) && vox[(y * d + z) * w + x]) return { x, y, z, nx: 0, ny: 1, nz: 0 }
+  const sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1
+  const tdx = dx !== 0 ? Math.abs(size / dx) : Infinity, tdy = dy !== 0 ? Math.abs(size / dy) : Infinity, tdz = dz !== 0 ? Math.abs(size / dz) : Infinity
+  const wx = (x - w / 2) * size, wy = y * size, wz = (z - d / 2) * size
+  let tmx = dx !== 0 ? (dx > 0 ? wx + size - o.x : o.x - wx) / Math.abs(dx) : Infinity
+  let tmy = dy !== 0 ? (dy > 0 ? wy + size - o.y : o.y - wy) / Math.abs(dy) : Infinity
+  let tmz = dz !== 0 ? (dz > 0 ? wz + size - o.z : o.z - wz) / Math.abs(dz) : Infinity
   let nx = 0, ny = 0, nz = 0, t = 0
   while (t <= maxDist) {
-    if (tMaxX < tMaxY && tMaxX < tMaxZ) { x += stepX; t = tMaxX; tMaxX += tDeltaX; nx = -stepX; ny = 0; nz = 0 }
-    else if (tMaxY < tMaxZ) { y += stepY; t = tMaxY; tMaxY += tDeltaY; nx = 0; ny = -stepY; nz = 0 }
-    else { z += stepZ; t = tMaxZ; tMaxZ += tDeltaZ; nx = 0; ny = 0; nz = -stepZ }
+    if (tmx < tmy && tmx < tmz) { x += sx; t = tmx; tmx += tdx; nx = -sx; ny = 0; nz = 0 }
+    else if (tmy < tmz) { y += sy; t = tmy; tmy += tdy; nx = 0; ny = -sy; nz = 0 }
+    else { z += sz; t = tmz; tmz += tdz; nx = 0; ny = 0; nz = -sz }
     if (x < -2 || x > w + 1 || y < -2 || y > h + 1 || z < -2 || z > d + 1) break
-    if (inRange(x, y, z) && vox[(y * d + z) * w + x]) return { x, y, z, nx, ny, nz }
+    if (inR(x, y, z) && vox[(y * d + z) * w + x]) return { x, y, z, nx, ny, nz }
   }
   return null
 }
-
-interface TerrainWork {
-  id: string; w: number; h: number; d: number; size: number
-  vox: Uint8Array; mat: Uint8Array; srcV: string; srcM: string
-  chunks: Map<string, Mesh>
-}
-interface WaterWork {
-  id: string; sub: number; size: number; mesh: Mesh
-  base: Float32Array; positions: Float32Array; normals: Float32Array; indices: number[]
-}
-interface FlyState {
-  pos: Vector3; yaw: number; pitch: number; tYaw: number; tPitch: number
-  roll: number; speed: number; keys: Set<string>; looking: boolean
-}
+interface TerrainWork { id: string; w: number; h: number; d: number; size: number; vox: Uint8Array; mat: Uint8Array; srcV: string; srcM: string; chunks: Map<string, Mesh> }
+interface WaterWork { id: string; sub: number; size: number; mesh: Mesh; base: Float32Array; positions: Float32Array; normals: Float32Array; indices: number[] }
 
 export function Viewport(props: ViewportProps) {
   const { objects, selectedObject, onSelect, onUpdate, isPlaying, gizmoMode, logic, onHud } = props
-  const [flyMode, setFlyMode] = useState(false)
-  const [flyCollision, setFlyCollision] = useState(true)
-  const flyModeRef = useRef(flyMode)
-  const flyCollisionRef = useRef(flyCollision)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<Scene | null>(null)
   const cameraRef = useRef<ArcRotateCamera | null>(null)
-  const flyCamRef = useRef<FreeCamera | null>(null)
-  const flyRef = useRef<FlyState>({
-    pos: new Vector3(0, 20, -30), yaw: 0, pitch: -0.3, tYaw: 0, tPitch: -0.3,
-    roll: 0, speed: 20, keys: new Set(), looking: false
-  })
   const gizmoRef = useRef<GizmoManager | null>(null)
   const groundRef = useRef<Mesh | null>(null)
   const cursorRef = useRef<Mesh | null>(null)
@@ -859,29 +74,27 @@ export function Viewport(props: ViewportProps) {
   const floatVelRef = useRef<Map<string, number>>(new Map())
   const sinkProgRef = useRef<Map<string, number>>(new Map())
   const sinkTargetRef = useRef<Map<string, number>>(new Map())
-  const objectsRef = useRef<SceneObject[]>(objects)
-  const selectedRef = useRef<SceneObject | null>(selectedObject)
+  const objectsRef = useRef(objects)
+  const selectedRef = useRef(selectedObject)
   const onSelectRef = useRef(onSelect)
   const onUpdateRef = useRef(onUpdate)
   const isPlayingRef = useRef(isPlaying)
-  const logicRef = useRef<LogicData>(logic)
+  const logicRef = useRef(logic)
   const onHudRef = useRef(onHud)
   const keysRef = useRef<Set<string>>(new Set())
   const playStartRef = useRef(0)
   const lastTsRef = useRef(0)
-  const lastFlyRef = useRef(0)
   const lastWaterRef = useRef(0)
-  const gizmoModeRef = useRef<GizmoMode>('position')
   const chainsRef = useRef<{ event: LogicNode; actions: LogicNode[] }[]>([])
   const touchFiredRef = useRef<Set<string>>(new Set())
   const timerAccRef = useRef<Map<string, number>>(new Map())
   const scoreRef = useRef(0)
   const runtimeHiddenRef = useRef<Set<string>>(new Set())
-  const toolRef = useRef<TerrainTool | null>(props.terrainTool)
+  const toolRef = useRef(props.terrainTool)
   const radiusRef = useRef(props.brushRadius)
   const strengthRef = useRef(props.brushStrength)
   const paintRef = useRef(props.paintId)
-  const commitTerrainRef = useRef(props.onCommitTerrain)
+  const commitRef = useRef(props.onCommitTerrain)
 
   useEffect(() => { objectsRef.current = objects }, [objects])
   useEffect(() => { onSelectRef.current = onSelect }, [onSelect])
@@ -893,56 +106,15 @@ export function Viewport(props: ViewportProps) {
   useEffect(() => { radiusRef.current = props.brushRadius }, [props.brushRadius])
   useEffect(() => { strengthRef.current = props.brushStrength }, [props.brushStrength])
   useEffect(() => { paintRef.current = props.paintId }, [props.paintId])
-  useEffect(() => { commitTerrainRef.current = props.onCommitTerrain }, [props.onCommitTerrain])
-  useEffect(() => { flyModeRef.current = flyMode }, [flyMode])
-  useEffect(() => { flyCollisionRef.current = flyCollision }, [flyCollision])
-
-  useEffect(() => {
-    if (isPlaying && flyModeRef.current) setFlyMode(false)
-  }, [isPlaying])
-
-  useEffect(() => {
-    const sc = sceneRef.current
-    const orbit = cameraRef.current
-    const fly = flyCamRef.current
-    if (!sc || !orbit || !fly) return
-    if (flyMode && !isPlaying) {
-      const f = flyRef.current
-      f.pos = orbit.position.clone()
-      const dir = orbit.target.subtract(orbit.position)
-      const len = dir.length() || 1
-      f.yaw = f.tYaw = Math.atan2(dir.x, dir.z)
-      f.pitch = f.tPitch = Math.asin(clamp(dir.y / len, -1, 1))
-      f.roll = 0
-      sc.activeCamera = fly
-    } else {
-      const f = flyRef.current
-      const cp = Math.cos(f.pitch)
-      const fwd = new Vector3(Math.sin(f.yaw) * cp, Math.sin(f.pitch), Math.cos(f.yaw) * cp)
-      orbit.position = f.pos.clone()
-      orbit.target = f.pos.add(fwd.scale(12))
-      sc.activeCamera = orbit
-    }
-  }, [flyMode, isPlaying])
-
-  useEffect(() => {
-    if (cursorRef.current) cursorRef.current.setEnabled(!!props.terrainTool && !isPlaying)
-  }, [props.terrainTool, isPlaying])
-
+  useEffect(() => { commitRef.current = props.onCommitTerrain }, [props.onCommitTerrain])
+  useEffect(() => { if (cursorRef.current) cursorRef.current.setEnabled(!!props.terrainTool && !isPlaying) }, [props.terrainTool, isPlaying])
   useEffect(() => {
     const cam = cameraRef.current
     if (!cam) return
     try {
-      const attached: any = (cam.inputs as any).attached
-      if (props.terrainTool) {
-        if (attached && attached.pointers) {
-          pointersInputRef.current = attached.pointers
-          cam.inputs.remove(attached.pointers)
-        }
-      } else if (pointersInputRef.current) {
-        cam.inputs.add(pointersInputRef.current)
-        pointersInputRef.current = null
-      }
+      const at: any = (cam.inputs as any).attached
+      if (props.terrainTool) { if (at && at.pointers) { pointersInputRef.current = at.pointers; cam.inputs.remove(at.pointers) } }
+      else if (pointersInputRef.current) { cam.inputs.add(pointersInputRef.current); pointersInputRef.current = null }
     } catch { /* ignore */ }
   }, [props.terrainTool])
 
@@ -954,8 +126,7 @@ export function Viewport(props: ViewportProps) {
     const old = w.chunks.get(key)
     if (old) old.dispose()
     const x0 = cx * CHUNK, z0 = cz * CHUNK
-    const x1 = Math.min(w.w, x0 + CHUNK), z1 = Math.min(w.d, z0 + CHUNK)
-    const geo = buildVoxelGeometryRegion(w.vox, w.mat, w.w, w.h, w.d, w.size, x0, z0, x1, z1)
+    const geo = buildVoxelGeometryRegion(w.vox, w.mat, w.w, w.h, w.d, w.size, x0, z0, Math.min(w.w, x0 + CHUNK), Math.min(w.d, z0 + CHUNK))
     if (geo.indices.length === 0) { w.chunks.delete(key); return }
     const mesh = createVoxelMesh(sc, w.id + '_c' + key, geo)
     mesh.isPickable = true
@@ -963,29 +134,481 @@ export function Viewport(props: ViewportProps) {
   }
   const remeshAll = (w: TerrainWork) => {
     disposeChunks(w)
-    for (let cz = 0; cz < Math.ceil(w.d / CHUNK); cz++)
-      for (let cx = 0; cx < Math.ceil(w.w / CHUNK); cx++) remeshChunk(w, cx, cz)
+    for (let cz = 0; cz < Math.ceil(w.d / CHUNK); cz++) for (let cx = 0; cx < Math.ceil(w.w / CHUNK); cx++) remeshChunk(w, cx, cz)
   }
-  const remeshRegion = (w: TerrainWork, minx: number, minz: number, maxx: number, maxz: number) => {
-    const cx0 = Math.max(0, Math.floor(minx / CHUNK))
-    const cx1 = Math.min(Math.ceil(w.w / CHUNK) - 1, Math.floor(maxx / CHUNK))
-    const cz0 = Math.max(0, Math.floor(minz / CHUNK))
-    const cz1 = Math.min(Math.ceil(w.d / CHUNK) - 1, Math.floor(maxz / CHUNK))
-    for (let cz = cz0; cz <= cz1; cz++) for (let cx = cx0; cx <= cx1; cx++) remeshChunk(w, cx, cz)
+  const remeshRegion = (w: TerrainWork, a: number, b: number, c: number, e: number) => {
+    for (let cz = Math.max(0, Math.floor(b / CHUNK)); cz <= Math.min(Math.ceil(w.d / CHUNK) - 1, Math.floor(e / CHUNK)); cz++)
+      for (let cx = Math.max(0, Math.floor(a / CHUNK)); cx <= Math.min(Math.ceil(w.w / CHUNK) - 1, Math.floor(c / CHUNK)); cx++) remeshChunk(w, cx, cz)
   }
 
   const runChain = (actions: LogicNode[]) => {
-    actions.forEach((node) => {
-      const d = node.data
-      switch (d.type) {
-        case 'score': scoreRef.current += typeof d.value === 'number' ? d.value : 1; onHudRef.current({ score: scoreRef.current, message: '' }); break
-        case 'text': onHudRef.current({ score: scoreRef.current, message: d.message || '...' }); break
-        case 'delete': { const m = meshesRef.current.get(d.objectId); if (m) { m.setEnabled(false); runtimeHiddenRef.current.add(d.objectId) } break }
-        case 'color': { const m = meshesRef.current.get(d.objectId); const mat = m?.material as StandardMaterial | undefined; if (mat) mat.diffuseColor = Color3.FromHexString(d.color || '#ffcc00'); break }
-        case 'sink': if (d.objectId) sinkTargetRef.current.set(d.objectId, 1); break
-        case 'float': if (d.objectId) sinkTargetRef.current.set(d.objectId, 0); break
-      }
+    actions.forEach((n) => {
+      const d = n.data
+      if (d.type === 'score') { scoreRef.current += typeof d.value === 'number' ? d.value : 1; onHudRef.current({ score: scoreRef.current, message: '' }) }
+      else if (d.type === 'text') onHudRef.current({ score: scoreRef.current, message: d.message || '...' })
+      else if (d.type === 'delete') { const m = meshesRef.current.get(d.objectId); if (m) { m.setEnabled(false); runtimeHiddenRef.current.add(d.objectId) } }
+      else if (d.type === 'color') { const m = meshesRef.current.get(d.objectId); const mt = m?.material as StandardMaterial | undefined; if (mt) mt.diffuseColor = Color3.FromHexString(d.color || '#ffcc00') }
+      else if (d.type === 'sink' && d.objectId) sinkTargetRef.current.set(d.objectId, 1)
+      else if (d.type === 'float' && d.objectId) sinkTargetRef.current.set(d.objectId, 0)
     })
   }
   const runChainRef = useRef(runChain)
-  useEffect(() => { runChainRef.current = runChain }
+  useEffect(() => { runChainRef.current = runChain })
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying
+    keysRef.current.clear()
+    if (isPlaying) {
+      playStartRef.current = performance.now(); lastTsRef.current = performance.now()
+      scoreRef.current = 0
+      touchFiredRef.current.clear(); timerAccRef.current.clear(); sinkTargetRef.current.clear(); sinkProgRef.current.clear(); floatVelRef.current.clear()
+      chainsRef.current = buildChains(logicRef.current)
+      chainsRef.current.filter((c) => c.event.data.type === 'start').forEach((c) => runChainRef.current(c.actions))
+      const a = document.activeElement as HTMLElement | null
+      if (a && typeof a.blur === 'function') a.blur()
+    } else {
+      runtimeHiddenRef.current.forEach((id) => { const m = meshesRef.current.get(id); if (m) m.setEnabled(true) })
+      runtimeHiddenRef.current.clear()
+      objectsRef.current.forEach((o) => {
+        if (o.type === 'terrain' || o.type === 'water') return
+        const m = meshesRef.current.get(o.id)
+        if (!m) return
+        m.position.set(o.position.x, o.position.y, o.position.z)
+        m.rotationQuaternion = eulerToQuat(o.rotation)
+        const mt = m.material as StandardMaterial
+        const c = o.color ?? { r: 0.2, g: 0.5, b: 0.8 }
+        mt.diffuseColor = new Color3(c.r, c.g, c.b)
+      })
+    }
+  }, [isPlaying])
+
+  useEffect(() => {
+    if (!canvasRef.current) return
+    const engine = new Engine(canvasRef.current, true)
+    const scene = new Scene(engine)
+    scene.clearColor = new Color4(0.07, 0.07, 0.12, 1)
+    const camera = new ArcRotateCamera('camera', Math.PI / 2, Math.PI / 3, 12, new Vector3(0, 0.5, 0), scene)
+    camera.attachControl(canvasRef.current, true)
+    camera.wheelPrecision = 20
+    cameraRef.current = camera
+    const hemi = new HemisphericLight('hemi', Vector3.Up(), scene); hemi.intensity = 0.5
+    const sun = new DirectionalLight('sun', new Vector3(-1, -2, -1), scene); sun.intensity = 0.8
+    const ground = MeshBuilder.CreateGround('ground', { width: 30, height: 30 }, scene)
+    const gm0 = new StandardMaterial('groundMaterial', scene); gm0.diffuseColor = new Color3(0.25, 0.28, 0.25)
+    ground.material = gm0
+    groundRef.current = ground
+    const cursor = MeshBuilder.CreateSphere('brushCursor', { diameter: 1 }, scene)
+    const cm = new StandardMaterial('cursorMat', scene); cm.emissiveColor = new Color3(1, 0.8, 0.1); cm.alpha = 0.5
+    cursor.material = cm; cursor.isPickable = false; cursor.setEnabled(false)
+    cursorRef.current = cursor
+    const gizmoManager = new GizmoManager(scene)
+    gizmoManager.boundingBoxGizmoEnabled = false; gizmoManager.usePointerToAttachGizmos = false
+    gizmoRef.current = gizmoManager
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) { e.preventDefault(); keysRef.current.add(e.code) }
+    }
+    const onKeyUp = (e: KeyboardEvent) => { keysRef.current.delete(e.code) }
+    window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp)
+
+    let sculpting = false
+    const voxelCenter = (w: TerrainWork, x: number, y: number, z: number) => new Vector3((x + 0.5 - w.w / 2) * w.size, (y + 0.5) * w.size, (z + 0.5 - w.d / 2) * w.size)
+    const getHit = (clientX: number, clientY: number): VoxelHit | null => {
+      const canvas = canvasRef.current
+      const sc = sceneRef.current
+      const w = terrainWorkRef.current
+      if (!canvas || !sc || !w) return null
+      const rect = canvas.getBoundingClientRect()
+      const cx = clientX - rect.left
+      const cy = clientY - rect.top
+      const ray = sc.createPickingRay(cx, cy)
+      const dda = raycastVoxels(w.vox, w.w, w.h, w.d, w.size, ray.origin, ray.direction, 1000)
+      if (dda) return dda
+      const pick = sc.pick(cx, cy)
+      if (pick && pick.hit && pick.pickedPoint && pick.pickedMesh && pick.pickedMesh.id.startsWith(w.id + '_c')) {
+        const p = pick.pickedPoint
+        let n = new Vector3(0, 1, 0)
+        try { const gn = pick.getNormal(true); if (gn) n = gn } catch { /* ignore */ }
+        return {
+          x: Math.floor((p.x - n.x * 0.01) / w.size + w.w / 2),
+          y: Math.floor((p.y - n.y * 0.01) / w.size),
+          z: Math.floor((p.z - n.z * 0.01) / w.size + w.d / 2),
+          nx: Math.round(n.x), ny: Math.round(n.y), nz: Math.round(n.z)
+        }
+      }
+      return null
+    }
+    const updateCursor = (hit: VoxelHit | null) => {
+      const c = cursorRef.current
+      const w = terrainWorkRef.current
+      if (!c || !w) return
+      if (!hit || !toolRef.current || isPlayingRef.current) { c.setEnabled(false); return }
+      c.setEnabled(true)
+      c.position = voxelCenter(w, hit.x, hit.y, hit.z)
+      const s = radiusRef.current * 2
+      c.scaling.set(s, s, s)
+    }
+    const sculptHit = (hit: VoxelHit) => {
+      const w = terrainWorkRef.current
+      const tool = toolRef.current
+      if (!w || !tool) return
+      try {
+        let bx = hit.x, by = hit.y, bz = hit.z
+        if (tool === 'raise') { bx += hit.nx; by += hit.ny; bz += hit.nz }
+        const px = (bx + 0.5 - w.w / 2) * w.size
+        const py = (by + 0.5) * w.size
+        const pz = (bz + 0.5 - w.d / 2) * w.size
+        applyVoxelBrush(w.vox, w.mat, w.w, w.h, w.d, w.size, px, py, pz, radiusRef.current, tool, paintRef.current)
+        const r = radiusRef.current + 1
+        remeshRegion(w, px - r, pz - r, px + r, pz + r)
+      } catch (err) { console.error('[terrain] sculpt error', err) }
+    }
+    const onPointerDown = (e: PointerEvent) => {
+      if (!toolRef.current || isPlayingRef.current || e.button !== 0) return
+      if (!terrainWorkRef.current) return
+      const hit = getHit(e.clientX, e.clientY)
+      if (!hit) return
+      sculpting = true
+      sculptHit(hit)
+    }
+    const onPointerMove = (e: PointerEvent) => {
+      if (!toolRef.current || isPlayingRef.current) return
+      const hit = getHit(e.clientX, e.clientY)
+      updateCursor(hit)
+      if (sculpting && hit) sculptHit(hit)
+    }
+    const onPointerUp = () => {
+      if (!sculpting) return
+      sculpting = false
+      const w = terrainWorkRef.current
+      if (w) commitRef.current(rleEncode(w.vox), rleEncode(w.mat))
+    }
+    canvasRef.current.addEventListener('pointerdown', onPointerDown)
+    canvasRef.current.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    const resizeObserver = new ResizeObserver(() => engine.resize())
+    if (canvasRef.current.parentElement) resizeObserver.observe(canvasRef.current.parentElement)
+
+    engine.runRenderLoop(() => {
+      const nowAll = performance.now()
+      const tAll = nowAll / 1000
+      const ww = waterWorkRef.current
+      const wd = waterDataRef.current
+      if (ww && wd && nowAll - lastWaterRef.current > 33) {
+        lastWaterRef.current = nowAll
+        const vc = ww.positions.length / 3
+        for (let i = 0; i < vc; i++)
+          ww.positions[i * 3 + 1] = wd.level + waveH(ww.base[i * 2], ww.base[i * 2 + 1], tAll, wd.waveHeight, wd.waveSpeed)
+        VertexData.ComputeNormals(ww.positions, ww.indices, ww.normals)
+        ww.mesh.updateVerticesData('position', ww.positions)
+        ww.mesh.updateVerticesData('normal', ww.normals)
+      }
+      if (isPlayingRef.current) {
+        const now = performance.now()
+        const dt = Math.min(0.1, (now - lastTsRef.current) / 1000)
+        lastTsRef.current = now
+        const t = (now - playStartRef.current) / 1000
+        const tw = terrainWorkRef.current
+        const playerObj = objectsRef.current.find((o) => o.behaviors?.player)
+        if (wd) {
+          objectsRef.current.forEach((obj) => {
+            if (obj.type === 'terrain' || obj.type === 'water' || !obj.behaviors?.float) return
+            const mesh = meshesRef.current.get(obj.id)
+            if (!mesh || !mesh.isEnabled()) return
+            const target = sinkTargetRef.current.get(obj.id) ?? 0
+            const p0 = sinkProgRef.current.get(obj.id) ?? 0
+            const p = p0 + (target - p0) * Math.min(1, dt * 0.4)
+            sinkProgRef.current.set(obj.id, p)
+            const x = mesh.position.x, z = mesh.position.z
+            const h = wd.level + waveH(x, z, t, wd.waveHeight, wd.waveSpeed)
+            const targetY = h + obj.scale.y * 0.3 - p * (obj.scale.y * 0.5 + 2.5)
+            let vy = floatVelRef.current.get(obj.id) ?? 0
+            vy += (targetY - mesh.position.y) * 8 * dt
+            vy *= Math.max(0, 1 - 2.5 * dt)
+            mesh.position.y += vy
+            floatVelRef.current.set(obj.id, vy)
+            if (!obj.behaviors?.player) {
+              const d = 1.5
+              const hx = waveH(x + d, z, t, wd.waveHeight, wd.waveSpeed) - waveH(x - d, z, t, wd.waveHeight, wd.waveSpeed)
+              const hz = waveH(x, z + d, t, wd.waveHeight, wd.waveSpeed) - waveH(x, z - d, t, wd.waveHeight, wd.waveSpeed)
+              mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(0, hz * 0.12, -hx * 0.12)
+            }
+          })
+        }
+        if (playerObj) {
+          const pm = meshesRef.current.get(playerObj.id)
+          if (pm && pm.isEnabled()) {
+            const keys = keysRef.current
+            const fwd = camera.target.subtract(camera.position)
+            fwd.y = 0
+            if (fwd.lengthSquared() > 0.0001) fwd.normalize()
+            const right = Vector3.Cross(Vector3.Up(), fwd)
+            const move = Vector3.Zero()
+            if (keys.has('KeyW') || keys.has('ArrowUp')) move.addInPlace(fwd)
+            if (keys.has('KeyS') || keys.has('ArrowDown')) move.subtractInPlace(fwd)
+            if (keys.has('KeyD') || keys.has('ArrowRight')) move.addInPlace(right)
+            if (keys.has('KeyA') || keys.has('ArrowLeft')) move.subtractInPlace(right)
+            if (move.lengthSquared() > 0) {
+              move.normalize().scaleInPlace(0.12)
+              pm.position.addInPlace(move)
+              if (!playerObj.behaviors?.float) pm.rotationQuaternion = Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0)
+            }
+            if (tw && !playerObj.behaviors?.bounce && !playerObj.behaviors?.float)
+              pm.position.y = topHeightAt(tw.vox, tw.w, tw.h, tw.d, tw.size, pm.position.x, pm.position.z) + 0.5
+            camera.target.copyFrom(pm.position)
+            camera.target.y += 0.5
+          }
+        }
+        objectsRef.current.forEach((obj) => {
+          if (obj.type === 'terrain' || obj.type === 'water') return
+          const mesh = meshesRef.current.get(obj.id)
+          if (!mesh || !mesh.isEnabled()) return
+          const b = obj.behaviors
+          if (b?.spin) mesh.rotate(Vector3.Up(), 0.03)
+          if (b?.bounce && !b?.float) mesh.position.y = obj.position.y + Math.abs(Math.sin(t * 3)) * 1.5
+          if (b?.patrol && !b?.player) mesh.position.x = obj.position.x + Math.sin(t * 1.5) * 2
+        })
+        chainsRef.current.forEach((chain) => {
+          const ev = chain.event.data
+          if (ev.type === 'timer') {
+            const sec = Math.max(0.1, ev.seconds || 1)
+            const acc = (timerAccRef.current.get(chain.event.id) ?? 0) + dt
+            if (acc >= sec) { timerAccRef.current.set(chain.event.id, 0); runChainRef.current(chain.actions) }
+            else timerAccRef.current.set(chain.event.id, acc)
+          }
+          if (ev.type === 'touch' && ev.objectId) {
+            const tg = meshesRef.current.get(ev.objectId)
+            const pObj = objectsRef.current.find((o) => o.behaviors?.player)
+            const pl = pObj && meshesRef.current.get(pObj.id)
+            if (tg && pl && tg.isEnabled() && pl.isEnabled()) {
+              const dist = Vector3.Distance(pl.position, tg.position)
+              if (dist < 1.3) {
+                if (!touchFiredRef.current.has(chain.event.id)) { touchFiredRef.current.add(chain.event.id); runChainRef.current(chain.actions) }
+              } else touchFiredRef.current.delete(chain.event.id)
+            }
+          }
+        })
+      }
+      scene.render()
+    })
+
+    const handleResize = () => engine.resize()
+    window.addEventListener('resize', handleResize)
+    sceneRef.current = scene
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('pointerup', onPointerUp)
+      canvasRef.current?.removeEventListener('pointerdown', onPointerDown)
+      canvasRef.current?.removeEventListener('pointermove', onPointerMove)
+      resizeObserver.disconnect()
+      gizmoManager.dispose()
+      engine.dispose()
+      sceneRef.current = null
+      cameraRef.current = null
+      gizmoRef.current = null
+      groundRef.current = null
+      cursorRef.current = null
+      if (terrainWorkRef.current) disposeChunks(terrainWorkRef.current)
+      terrainWorkRef.current = null
+      waterWorkRef.current = null
+      meshesRef.current.clear()
+    }
+  }, [])
+
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+    const currentIds = new Set(objects.map((obj) => obj.id))
+    meshesRef.current.forEach((mesh, id) => {
+      if (!currentIds.has(id)) { mesh.dispose(); meshesRef.current.delete(id) }
+    })
+    objects.forEach((obj) => {
+      if (obj.type === 'terrain' || obj.type === 'water') return
+      let mesh = meshesRef.current.get(obj.id)
+      if (!mesh) {
+        switch (obj.type) {
+          case 'cube': mesh = MeshBuilder.CreateBox(obj.id, { size: 1 }, scene); break
+          case 'sphere': mesh = MeshBuilder.CreateSphere(obj.id, { diameter: 1 }, scene); break
+          case 'cylinder': mesh = MeshBuilder.CreateCylinder(obj.id, { height: 1, diameter: 1 }, scene); break
+          case 'plane': mesh = MeshBuilder.CreatePlane(obj.id, { size: 1 }, scene); break
+        }
+        const material = new StandardMaterial(`material_${obj.id}`, scene)
+        mesh.material = material
+        mesh.isPickable = true
+        mesh.actionManager = new ActionManager(scene)
+        mesh.actionManager.registerAction(
+          new ExecuteCodeAction(ActionManager.OnPickTrigger, () => {
+            const latest = objectsRef.current.find((o) => o.id === obj.id)
+            if (!latest) return
+            if (isPlayingRef.current) {
+              chainsRef.current.forEach((chain) => {
+                if (chain.event.data.type === 'click' && chain.event.data.objectId === obj.id) runChainRef.current(chain.actions)
+              })
+            } else onSelectRef.current(latest)
+          })
+        )
+        meshesRef.current.set(obj.id, mesh)
+      }
+      mesh.position.set(obj.position.x, obj.position.y, obj.position.z)
+      mesh.rotationQuaternion = eulerToQuat(obj.rotation)
+      mesh.scaling.set(obj.scale.x, obj.scale.y, obj.scale.z)
+      const mat = mesh.material as StandardMaterial
+      const col = obj.color ?? { r: 0.2, g: 0.5, b: 0.8 }
+      mat.diffuseColor = new Color3(col.r, col.g, col.b)
+      mat.emissiveColor = selectedObject?.id === obj.id ? new Color3(0.25, 0.08, 0.08) : Color3.Black()
+    })
+
+    const tObj = objects.find((o) => o.type === 'terrain')
+    if (groundRef.current) groundRef.current.setEnabled(!tObj)
+    if (tObj && tObj.terrain && tObj.terrain.voxels) {
+      const td = tObj.terrain as VoxelTerrainData
+      const w0 = terrainWorkRef.current
+      if (!w0 || w0.id !== tObj.id || w0.srcV !== td.voxels || w0.srcM !== td.mats) {
+        if (w0) disposeChunks(w0)
+        const len = td.w * td.h * td.d
+        const vox = td.rle ? rleDecode(td.voxels, len) : b64ToBytes(td.voxels)
+        const mat = td.rle ? rleDecode(td.mats, len) : b64ToBytes(td.mats)
+        const work: TerrainWork = {
+          id: tObj.id, w: td.w, h: td.h, d: td.d, size: td.size,
+          vox, mat, srcV: td.voxels, srcM: td.mats, chunks: new Map()
+        }
+        terrainWorkRef.current = work
+        remeshAll(work)
+      }
+    } else if (terrainWorkRef.current) {
+      disposeChunks(terrainWorkRef.current)
+      terrainWorkRef.current = null
+    }
+
+    const wObj = objects.find((o) => o.type === 'water')
+    if (wObj && wObj.water) {
+      const wd = wObj.water
+      waterDataRef.current = { level: wd.level, waveHeight: wd.waveHeight, waveSpeed: wd.waveSpeed }
+      let ww = waterWorkRef.current
+      if (!ww || ww.id !== wObj.id || ww.size !== wd.size) {
+        if (ww) { ww.mesh.dispose(); meshesRef.current.delete(ww.id) }
+        const sub = 64
+        const vcount = (sub + 1) * (sub + 1)
+        const positions = new Float32Array(vcount * 3)
+        const normals = new Float32Array(vcount * 3)
+        const base = new Float32Array(vcount * 2)
+        for (let row = 0; row <= sub; row++) {
+          for (let col = 0; col <= sub; col++) {
+            const i = row * (sub + 1) + col
+            const x = (col / sub - 0.5) * wd.size
+            const z = (row / sub - 0.5) * wd.size
+            positions[i * 3] = x; positions[i * 3 + 1] = wd.level; positions[i * 3 + 2] = z
+            base[i * 2] = x; base[i * 2 + 1] = z
+          }
+        }
+        const indices: number[] = []
+        const fill = (fl: boolean) => {
+          indices.length = 0
+          for (let r = 0; r < sub; r++) {
+            for (let c = 0; c < sub; c++) {
+              const a = r * (sub + 1) + c, b = a + 1, cc = a + sub + 1, d = cc + 1
+              if (fl) indices.push(a, cc, b, b, cc, d); else indices.push(cc, a, b, b, d, cc)
+            }
+          }
+        }
+        fill(false)
+        VertexData.ComputeNormals(positions, indices, normals)
+        const mid = (Math.floor(sub / 2) * (sub + 1) + Math.floor(sub / 2)) * 3 + 1
+        if (normals[mid] < 0) { fill(true); VertexData.ComputeNormals(positions, indices, normals) }
+        const mesh = new Mesh(wObj.id, scene)
+        const vd = new VertexData()
+        vd.positions = positions; vd.normals = normals; vd.indices = indices
+        vd.applyToMesh(mesh, true)
+        let mat: any = null
+        try {
+          const wm = new WaterMaterial('wm_' + wObj.id, scene)
+          const noise = new NoiseProceduralTexture('wbn_' + wObj.id, 256, scene)
+          noise.animationSpeedEnabled = true
+          wm.bumpTexture = noise
+          wm.windForce = 5 + wd.waveSpeed * 15
+          wm.waveLength = 0.4
+          wm.timeScale = wd.waveSpeed
+          wm.bumpLevel = 2
+          wm.alpha = 0.85
+          mat = wm
+        } catch {
+          const sm = new StandardMaterial('wm_' + wObj.id, scene)
+          sm.diffuseColor = Color3.FromHexString(wd.color || '#1e6fd8')
+          sm.specularColor = new Color3(0.7, 0.9, 1)
+          sm.alpha = 0.72
+          sm.backFaceCulling = false
+          mat = sm
+        }
+        mesh.material = mat
+        meshesRef.current.set(wObj.id, mesh)
+        ww = { id: wObj.id, sub, size: wd.size, mesh, base, positions, normals, indices }
+        waterWorkRef.current = ww
+      } else {
+        const m: any = ww.mesh.material
+        if (m && m.windForce !== undefined) { m.windForce = 5 + wd.waveSpeed * 15; m.timeScale = wd.waveSpeed }
+      }
+    } else {
+      waterDataRef.current = null
+      if (waterWorkRef.current) {
+        waterWorkRef.current.mesh.dispose()
+        meshesRef.current.delete(waterWorkRef.current.id)
+        waterWorkRef.current = null
+      }
+    }
+  }, [objects, selectedObject])
+
+  useEffect(() => {
+    const gm = gizmoRef.current
+    if (!gm) return
+    if (isPlaying || !selectedObject || selectedObject.type === 'terrain' || selectedObject.type === 'water') {
+      gm.attachToMesh(null)
+      return
+    }
+    const mesh = meshesRef.current.get(selectedObject.id)
+    if (!mesh) return
+    gm.attachToMesh(mesh)
+    gm.positionGizmoEnabled = gizmoMode === 'position'
+    gm.rotationGizmoEnabled = gizmoMode === 'rotation'
+    gm.scaleGizmoEnabled = gizmoMode === 'scale'
+    const g = gm.gizmos
+    if (gizmoMode === 'position' && g.positionGizmo) {
+      g.positionGizmo.onDragEndObservable.clear()
+      g.positionGizmo.onDragEndObservable.add(() => {
+        const sel = selectedRef.current
+        const m = sel && meshesRef.current.get(sel.id)
+        if (!sel || !m) return
+        onUpdateRef.current({ ...sel, position: { x: round2(m.position.x), y: round2(m.position.y), z: round2(m.position.z) } })
+      })
+    }
+    if (gizmoMode === 'rotation' && g.rotationGizmo) {
+      g.rotationGizmo.onDragEndObservable.clear()
+      g.rotationGizmo.onDragEndObservable.add(() => {
+        const sel = selectedRef.current
+        const m = sel && meshesRef.current.get(sel.id)
+        if (!sel || !m || !m.rotationQuaternion) return
+        onUpdateRef.current({ ...sel, rotation: quatToEuler(m.rotationQuaternion) })
+      })
+    }
+    if (gizmoMode === 'scale' && g.scaleGizmo) {
+      g.scaleGizmo.onDragEndObservable.clear()
+      g.scaleGizmo.onDragEndObservable.add(() => {
+        const sel = selectedRef.current
+        const m = sel && meshesRef.current.get(sel.id)
+        if (!sel || !m) return
+        onUpdateRef.current({ ...sel, scale: { x: round2(m.scaling.x), y: round2(m.scaling.y), z: round2(m.scaling.z) } })
+      })
+    }
+  }, [selectedObject, isPlaying, gizmoMode, objects])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width: '100%', height: '100%', outline: 'none' }}
+    />
+  )
+}
+// END_VIEWPORT
