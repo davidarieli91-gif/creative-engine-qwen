@@ -40,8 +40,11 @@ hemi.intensity = 0.5;
 var sun = new BABYLON.DirectionalLight('s', new BABYLON.Vector3(-1, -2, -1), scene);
 sun.intensity = 0.8;
 
-var hasTerrain = false;
-for (var ti = 0; ti < DATA.objects.length; ti++) if (DATA.objects[ti].type === 'terrain') hasTerrain = true;
+var hasTerrain = false, hasWater = false;
+for (var ti = 0; ti < DATA.objects.length; ti++) {
+  if (DATA.objects[ti].type === 'terrain') hasTerrain = true;
+  if (DATA.objects[ti].type === 'water') hasWater = true;
+}
 
 if (!hasTerrain) {
   var g0 = BABYLON.MeshBuilder.CreateGround('g', { width: 40, height: 40 }, scene);
@@ -51,6 +54,13 @@ if (!hasTerrain) {
 }
 
 var terrainData = null;
+var waterData = null;
+var waterMesh = null, waterBase = null, waterPositions = null, waterNormals = null, waterIndices = null;
+
+function waveH(x, z, t, amp, speed) {
+  if (amp <= 0) return 0;
+  return amp * (0.5 * Math.sin(x * 0.18 + t * speed) + 0.3 * Math.sin(z * 0.23 + t * speed * 1.31) + 0.2 * Math.sin((x + z) * 0.11 + t * speed * 0.71));
+}
 
 function buildTerrain(o) {
   var sub = o.terrain.sub, size = o.terrain.size;
@@ -69,12 +79,9 @@ function buildTerrain(o) {
   var indices = [];
   function fill(fl) {
     indices.length = 0;
-    for (var r = 0; r < sub; r++) {
-      for (var c = 0; c < sub; c++) {
-        var a = r * (sub + 1) + c, b = a + 1, cc = a + sub + 1, d = cc + 1;
-        if (fl) indices.push(a, cc, b, b, cc, d);
-        else indices.push(cc, a, b, b, d, cc);
-      }
+    for (var r = 0; r < sub; r++) for (var c = 0; c < sub; c++) {
+      var a = r * (sub + 1) + c, b = a + 1, cc = a + sub + 1, d = cc + 1;
+      if (fl) indices.push(a, cc, b, b, cc, d); else indices.push(cc, a, b, b, d, cc);
     }
   }
   fill(false);
@@ -83,15 +90,56 @@ function buildTerrain(o) {
   if (normals[mid] < 0) { fill(true); BABYLON.VertexData.ComputeNormals(positions, indices, normals); }
   var mesh = new BABYLON.Mesh('terrainMesh', scene);
   var vd = new BABYLON.VertexData();
-  vd.positions = positions;
-  vd.normals = normals;
-  vd.indices = indices;
-  vd.colors = colors;
+  vd.positions = positions; vd.normals = normals; vd.indices = indices; vd.colors = colors;
   vd.applyToMesh(mesh, true);
   var mat = new BABYLON.StandardMaterial('tmat', scene);
   mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
   mesh.material = mat;
   return mesh;
+}
+
+function buildWater(o) {
+  var wd = o.water;
+  waterData = wd;
+  var sub = 64;
+  var vcount = (sub + 1) * (sub + 1);
+  waterPositions = new Float32Array(vcount * 3);
+  waterNormals = new Float32Array(vcount * 3);
+  waterBase = new Float32Array(vcount * 2);
+  for (var row = 0; row <= sub; row++) {
+    for (var col = 0; col <= sub; col++) {
+      var i = row * (sub + 1) + col;
+      var x = (col / sub - 0.5) * wd.size;
+      var z = (row / sub - 0.5) * wd.size;
+      waterPositions[i * 3] = x;
+      waterPositions[i * 3 + 1] = wd.level;
+      waterPositions[i * 3 + 2] = z;
+      waterBase[i * 2] = x;
+      waterBase[i * 2 + 1] = z;
+    }
+  }
+  waterIndices = [];
+  function fill(fl) {
+    waterIndices.length = 0;
+    for (var r = 0; r < sub; r++) for (var c = 0; c < sub; c++) {
+      var a = r * (sub + 1) + c, b = a + 1, cc = a + sub + 1, d = cc + 1;
+      if (fl) waterIndices.push(a, cc, b, b, cc, d); else waterIndices.push(cc, a, b, b, d, cc);
+    }
+  }
+  fill(false);
+  BABYLON.VertexData.ComputeNormals(waterPositions, waterIndices, waterNormals);
+  var mid = (Math.floor(sub / 2) * (sub + 1) + Math.floor(sub / 2)) * 3 + 1;
+  if (waterNormals[mid] < 0) { fill(true); BABYLON.VertexData.ComputeNormals(waterPositions, waterIndices, waterNormals); }
+  waterMesh = new BABYLON.Mesh('waterMesh', scene);
+  var vd = new BABYLON.VertexData();
+  vd.positions = waterPositions; vd.normals = waterNormals; vd.indices = waterIndices;
+  vd.applyToMesh(waterMesh, true);
+  var mat = new BABYLON.StandardMaterial('wmat', scene);
+  mat.diffuseColor = BABYLON.Color3.FromHexString(wd.color || '#1e6fd8');
+  mat.specularColor = new BABYLON.Color3(0.7, 0.9, 1);
+  mat.alpha = 0.72;
+  mat.backFaceCulling = false;
+  waterMesh.material = mat;
 }
 
 function sampleTerrain(x, z) {
@@ -108,11 +156,8 @@ function sampleTerrain(x, z) {
 
 var meshes = {};
 DATA.objects.forEach(function (o) {
-  if (o.type === 'terrain') {
-    terrainData = o.terrain;
-    meshes[o.id] = buildTerrain(o);
-    return;
-  }
+  if (o.type === 'terrain') { terrainData = o.terrain; meshes[o.id] = buildTerrain(o); return; }
+  if (o.type === 'water') { buildWater(o); meshes[o.id] = waterMesh; return; }
   var m;
   if (o.type === 'cube') m = BABYLON.MeshBuilder.CreateBox(o.id, { size: 1 }, scene);
   else if (o.type === 'sphere') m = BABYLON.MeshBuilder.CreateSphere(o.id, { diameter: 1 }, scene);
@@ -159,8 +204,12 @@ var score = 0;
 var keys = {};
 var fired = {};
 var timers = {};
+var sinkTarget = {};
+var sinkProg = {};
+var floatVel = {};
 var startTime = performance.now();
 var last = startTime;
+var lastWater = 0;
 
 function hud() { document.getElementById('score').textContent = '🏆 ' + score; }
 function msg(t) {
@@ -180,6 +229,8 @@ function runChain(actions) {
       var m2 = meshes[d.objectId];
       if (m2 && m2.material) m2.material.diffuseColor = BABYLON.Color3.FromHexString(d.color || '#ffcc00');
     }
+    else if (d.type === 'sink') { sinkTarget[d.objectId] = 1; }
+    else if (d.type === 'float') { sinkTarget[d.objectId] = 0; }
   });
 }
 
@@ -206,10 +257,50 @@ engine.runRenderLoop(function () {
   last = now;
   var t = (now - startTime) / 1000;
 
+  if (waterMesh && waterData && now - lastWater > 33) {
+    lastWater = now;
+    var vcount = waterPositions.length / 3;
+    for (var wi = 0; wi < vcount; wi++) {
+      waterPositions[wi * 3 + 1] = waterData.level +
+        waveH(waterBase[wi * 2], waterBase[wi * 2 + 1], t, waterData.waveHeight, waterData.waveSpeed);
+    }
+    BABYLON.VertexData.ComputeNormals(waterPositions, waterIndices, waterNormals);
+    waterMesh.updateVerticesData('position', waterPositions);
+    waterMesh.updateVerticesData('normal', waterNormals);
+  }
+
   var playerObj = null;
   for (var i = 0; i < DATA.objects.length; i++) {
     if (DATA.objects[i].behaviors && DATA.objects[i].behaviors.player) { playerObj = DATA.objects[i]; break; }
   }
+
+  if (waterData) {
+    DATA.objects.forEach(function (o) {
+      if (o.type === 'terrain' || o.type === 'water') return;
+      if (!o.behaviors || !o.behaviors.float) return;
+      var m = meshes[o.id];
+      if (!m || !m.isEnabled()) return;
+      var target = sinkTarget[o.id] || 0;
+      var p0 = sinkProg[o.id] || 0;
+      var p = p0 + (target - p0) * Math.min(1, dt * 0.4);
+      sinkProg[o.id] = p;
+      var x = m.position.x, z = m.position.z;
+      var h = waterData.level + waveH(x, z, t, waterData.waveHeight, waterData.waveSpeed);
+      var targetY = h + o.scale.y * 0.3 - p * (o.scale.y * 0.5 + 2.5);
+      var vy = floatVel[o.id] || 0;
+      vy += (targetY - m.position.y) * 8 * dt;
+      vy *= Math.max(0, 1 - 2.5 * dt);
+      m.position.y += vy;
+      floatVel[o.id] = vy;
+      if (!o.behaviors.player) {
+        var d = 1.5;
+        var hx = waveH(x + d, z, t, waterData.waveHeight, waterData.waveSpeed) - waveH(x - d, z, t, waterData.waveHeight, waterData.waveSpeed);
+        var hz = waveH(x, z + d, t, waterData.waveHeight, waterData.waveSpeed) - waveH(x, z - d, t, waterData.waveHeight, waterData.waveSpeed);
+        m.rotationQuaternion = BABYLON.Quaternion.RotationYawPitchRoll(0, hz * 0.12, -hx * 0.12);
+      }
+    });
+  }
+
   if (playerObj) {
     var pm = meshes[playerObj.id];
     if (pm && pm.isEnabled()) {
@@ -225,9 +316,11 @@ engine.runRenderLoop(function () {
       if (move.lengthSquared() > 0) {
         move.normalize().scaleInPlace(0.12);
         pm.position.addInPlace(move);
-        pm.rotationQuaternion = BABYLON.Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0);
+        if (!playerObj.behaviors.float) {
+          pm.rotationQuaternion = BABYLON.Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0);
+        }
       }
-      if (terrainData && !(playerObj.behaviors && playerObj.behaviors.bounce)) {
+      if (terrainData && !(playerObj.behaviors && playerObj.behaviors.bounce) && !(playerObj.behaviors && playerObj.behaviors.float)) {
         var half = terrainData.size / 2;
         if (Math.abs(pm.position.x) < half && Math.abs(pm.position.z) < half) {
           pm.position.y = sampleTerrain(pm.position.x, pm.position.z) + 0.5;
@@ -239,12 +332,12 @@ engine.runRenderLoop(function () {
   }
 
   DATA.objects.forEach(function (o) {
-    if (o.type === 'terrain') return;
+    if (o.type === 'terrain' || o.type === 'water') return;
     var m = meshes[o.id];
     if (!m || !m.isEnabled()) return;
     var b = o.behaviors || {};
     if (b.spin) m.rotate(BABYLON.Vector3.Up(), 0.03);
-    if (b.bounce) m.position.y = o.position.y + Math.abs(Math.sin(t * 3)) * 1.5;
+    if (b.bounce && !b.float) m.position.y = o.position.y + Math.abs(Math.sin(t * 3)) * 1.5;
     if (b.patrol && !b.player) m.position.x = o.position.x + Math.sin(t * 1.5) * 2;
   });
 
@@ -260,8 +353,8 @@ engine.runRenderLoop(function () {
       var tg = meshes[ev.objectId];
       var pl = playerObj && meshes[playerObj.id];
       if (tg && pl && tg.isEnabled() && pl.isEnabled()) {
-        var d = BABYLON.Vector3.Distance(pl.position, tg.position);
-        if (d < 1.3) {
+        var d2 = BABYLON.Vector3.Distance(pl.position, tg.position);
+        if (d2 < 1.3) {
           if (!fired[ch.event.id]) { fired[ch.event.id] = true; runChain(ch.actions); }
         } else delete fired[ch.event.id];
       }
