@@ -39,13 +39,80 @@ var hemi = new BABYLON.HemisphericLight('h', BABYLON.Vector3.Up(), scene);
 hemi.intensity = 0.5;
 var sun = new BABYLON.DirectionalLight('s', new BABYLON.Vector3(-1, -2, -1), scene);
 sun.intensity = 0.8;
-var ground = BABYLON.MeshBuilder.CreateGround('g', { width: 40, height: 40 }, scene);
-var gmat = new BABYLON.StandardMaterial('gm', scene);
-gmat.diffuseColor = new BABYLON.Color3(0.25, 0.28, 0.25);
-ground.material = gmat;
+
+var hasTerrain = false;
+for (var ti = 0; ti < DATA.objects.length; ti++) if (DATA.objects[ti].type === 'terrain') hasTerrain = true;
+
+if (!hasTerrain) {
+  var g0 = BABYLON.MeshBuilder.CreateGround('g', { width: 40, height: 40 }, scene);
+  var gmat = new BABYLON.StandardMaterial('gm', scene);
+  gmat.diffuseColor = new BABYLON.Color3(0.25, 0.28, 0.25);
+  g0.material = gmat;
+}
+
+var terrainData = null;
+
+function buildTerrain(o) {
+  var sub = o.terrain.sub, size = o.terrain.size;
+  var heights = o.terrain.heights, colors = o.terrain.colors;
+  var vcount = (sub + 1) * (sub + 1);
+  var positions = new Float32Array(vcount * 3);
+  var normals = new Float32Array(vcount * 3);
+  for (var row = 0; row <= sub; row++) {
+    for (var col = 0; col <= sub; col++) {
+      var i = row * (sub + 1) + col;
+      positions[i * 3] = (col / sub - 0.5) * size;
+      positions[i * 3 + 1] = heights[i];
+      positions[i * 3 + 2] = (row / sub - 0.5) * size;
+    }
+  }
+  var indices = [];
+  function fill(fl) {
+    indices.length = 0;
+    for (var r = 0; r < sub; r++) {
+      for (var c = 0; c < sub; c++) {
+        var a = r * (sub + 1) + c, b = a + 1, cc = a + sub + 1, d = cc + 1;
+        if (fl) indices.push(a, cc, b, b, cc, d);
+        else indices.push(cc, a, b, b, d, cc);
+      }
+    }
+  }
+  fill(false);
+  BABYLON.VertexData.ComputeNormals(positions, indices, normals);
+  var mid = (Math.floor(sub / 2) * (sub + 1) + Math.floor(sub / 2)) * 3 + 1;
+  if (normals[mid] < 0) { fill(true); BABYLON.VertexData.ComputeNormals(positions, indices, normals); }
+  var mesh = new BABYLON.Mesh('terrainMesh', scene);
+  var vd = new BABYLON.VertexData();
+  vd.positions = positions;
+  vd.normals = normals;
+  vd.indices = indices;
+  vd.colors = colors;
+  vd.applyToMesh(mesh, true);
+  var mat = new BABYLON.StandardMaterial('tmat', scene);
+  mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
+  mesh.material = mat;
+  return mesh;
+}
+
+function sampleTerrain(x, z) {
+  if (!terrainData) return 0;
+  var sub = terrainData.sub, size = terrainData.size, h = terrainData.heights;
+  var gx = Math.min(Math.max((x / size + 0.5) * sub, 0), sub - 0.0001);
+  var gz = Math.min(Math.max((z / size + 0.5) * sub, 0), sub - 0.0001);
+  var c0 = Math.floor(gx), r0 = Math.floor(gz);
+  var fx = gx - c0, fz = gz - r0;
+  var i = r0 * (sub + 1) + c0;
+  var h00 = h[i], h10 = h[i + 1], h01 = h[i + sub + 1], h11 = h[i + sub + 2];
+  return h00 + (h10 - h00) * fx + (h01 - h00) * fz + (h00 - h10 - h01 + h11) * fx * fz;
+}
 
 var meshes = {};
 DATA.objects.forEach(function (o) {
+  if (o.type === 'terrain') {
+    terrainData = o.terrain;
+    meshes[o.id] = buildTerrain(o);
+    return;
+  }
   var m;
   if (o.type === 'cube') m = BABYLON.MeshBuilder.CreateBox(o.id, { size: 1 }, scene);
   else if (o.type === 'sphere') m = BABYLON.MeshBuilder.CreateSphere(o.id, { diameter: 1 }, scene);
@@ -160,12 +227,19 @@ engine.runRenderLoop(function () {
         pm.position.addInPlace(move);
         pm.rotationQuaternion = BABYLON.Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0);
       }
+      if (terrainData && !(playerObj.behaviors && playerObj.behaviors.bounce)) {
+        var half = terrainData.size / 2;
+        if (Math.abs(pm.position.x) < half && Math.abs(pm.position.z) < half) {
+          pm.position.y = sampleTerrain(pm.position.x, pm.position.z) + 0.5;
+        }
+      }
       camera.target.copyFrom(pm.position);
       camera.target.y += 0.5;
     }
   }
 
   DATA.objects.forEach(function (o) {
+    if (o.type === 'terrain') return;
     var m = meshes[o.id];
     if (!m || !m.isEnabled()) return;
     var b = o.behaviors || {};
