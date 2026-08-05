@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { SceneObject } from './Editor'
-import { TerrainTool } from '../terrain'
+import { TerrainTool, VOX_PALETTE } from '../terrain'
 
 interface TerrainPanelProps {
   terrain: SceneObject | null
@@ -10,24 +10,18 @@ interface TerrainPanelProps {
   onRadius: (n: number) => void
   strength: number
   onStrength: (n: number) => void
-  paintColor: string
-  onPaintColor: (c: string) => void
-  onCreate: (sub: number, size: number) => void
+  paintId: number
+  onPaintId: (n: number) => void
+  onCreate: (w: number) => void
   onHills: () => void
   onScatter: (kind: 'trees' | 'rocks') => void
   onDelete: () => void
 }
 
-const presets = [
-  { label: '🌿 Трава', color: '#5da345' },
-  { label: '🪨 Камень', color: '#8a8f98' },
-  { label: '🏖 Песок', color: '#d9c38a' },
-  { label: '❄ Снег', color: '#f2f6ff' }
-]
+const paintNames = ['🌿 Трава', '🪨 Камень', '🏖 Песок', '❄ Снег', '🟤 Земля']
 
 export function TerrainPanel(props: TerrainPanelProps) {
-  const [sub, setSub] = useState(128)
-  const [size, setSize] = useState(60)
+  const [w, setW] = useState(64)
 
   const toolBtn = (t: TerrainTool, label: string) => (
     <button
@@ -42,20 +36,15 @@ export function TerrainPanel(props: TerrainPanelProps) {
   if (!props.terrain) {
     return (
       <div style={{ padding: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>⛰ Ландшафт:</span>
-        <select className="property-input" style={{ width: 150 }} value={sub} onChange={(e) => setSub(parseInt(e.target.value))}>
-          <option value={64}>Детализация: быстрая</option>
-          <option value={128}>Детализация: высокая</option>
-          <option value={256}>Детализация: ультра</option>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>⛏ Воксельный ландшафт:</span>
+        <select className="property-input" style={{ width: 170 }} value={w} onChange={(e) => setW(parseInt(e.target.value))}>
+          <option value={64}>Мир 64×64 (быстрый)</option>
+          <option value={96}>Мир 96×96 (детальный)</option>
         </select>
-        <select className="property-input" style={{ width: 130 }} value={size} onChange={(e) => setSize(parseInt(e.target.value))}>
-          <option value={40}>Размер: 40</option>
-          <option value={60}>Размер: 60</option>
-          <option value={80}>Размер: 80</option>
-        </select>
-        <button className="btn" style={{ background: '#16825d' }} onClick={() => props.onCreate(sub, size)}>
-          ⛰ Создать ландшафт
+        <button className="btn" style={{ background: '#16825d' }} onClick={() => props.onCreate(w)}>
+          ⛰ Создать остров
         </button>
+        <span style={{ color: '#888', fontSize: 12 }}>Настоящее 3D: копай, строй, крась — видно с любой стороны!</span>
       </div>
     )
   }
@@ -63,13 +52,13 @@ export function TerrainPanel(props: TerrainPanelProps) {
   return (
     <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {toolBtn('raise', '⬆ Поднять')}
-        {toolBtn('lower', '⬇ Опустить')}
+        {toolBtn('raise', '⬆ Насыпать')}
+        {toolBtn('lower', '⛏ Копать')}
         {toolBtn('smooth', '〰 Сгладить')}
         {toolBtn('flatten', '⏹ Выровнять')}
         {toolBtn('paint', '🎨 Краска')}
         <span style={{ flex: 1 }} />
-        <button className="btn" onClick={props.onHills}>🎲 Холмы</button>
+        <button className="btn" onClick={props.onHills}>🎲 Горы</button>
         <button className="btn" onClick={() => props.onScatter('trees')}>🌲 Деревья</button>
         <button className="btn" onClick={() => props.onScatter('rocks')}>🪨 Камни</button>
         <button className="btn btn-danger" onClick={props.onDelete}>🗑</button>
@@ -77,25 +66,29 @@ export function TerrainPanel(props: TerrainPanelProps) {
 
       {props.tool === 'paint' && (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {presets.map((p) => (
+          {paintNames.map((p, i) => (
             <button
-              key={p.color}
+              key={i}
               className="btn"
-              style={{ background: props.paintColor === p.color ? '#0e639c' : '#3e3e42' }}
-              onClick={() => props.onPaintColor(p.color)}
+              style={{ background: props.paintId === i ? '#0e639c' : '#3e3e42' }}
+              onClick={() => props.onPaintId(i)}
             >
-              {p.label}
+              {p}
             </button>
           ))}
-          <input type="color" value={props.paintColor} onChange={(e) => props.onPaintColor(e.target.value)}
-            style={{ width: 40, height: 26, background: '#1e1e1e', border: '1px solid #3e3e42', borderRadius: 4 }} />
+          <span
+            style={{
+              width: 22, height: 22, borderRadius: 4,
+              background: `rgb(${VOX_PALETTE[props.paintId].map((v) => Math.round(v * 255)).join(',')})`
+            }}
+          />
         </div>
       )}
 
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 12 }}>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           Кисть
-          <input type="range" min={1} max={12} step={0.5} value={props.radius}
+          <input type="range" min={1} max={10} step={0.5} value={props.radius}
             onChange={(e) => props.onRadius(parseFloat(e.target.value))} />
           {props.radius}
         </label>
@@ -105,7 +98,7 @@ export function TerrainPanel(props: TerrainPanelProps) {
             onChange={(e) => props.onStrength(parseFloat(e.target.value))} />
           {props.strength}
         </label>
-        <span style={{ color: '#888' }}>ЛКМ — инструмент · ПКМ — камера · колесо — зум</span>
+        <span style={{ color: '#888' }}>ЛКМ — инструмент · колесо — зум · панель закрыта — камера вращается</span>
       </div>
     </div>
   )
