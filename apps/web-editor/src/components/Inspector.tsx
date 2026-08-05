@@ -38,7 +38,8 @@ export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
     spin: false,
     bounce: false,
     patrol: false,
-    player: false
+    player: false,
+    float: false
   }
   const color = object.color ?? DEFAULT_COLOR
 
@@ -146,22 +147,27 @@ export function Inspector({ object, onUpdate, onDelete }: InspectorProps) {
       <div className="property-group">
         <div className="property-label">Behavior (работает в Play mode)</div>
         <label style={labelStyle}>
-          <input type="checkbox" checked={behaviors.player}
+          <input type="checkbox" checked={!!behaviors.player}
             onChange={(e) => updateBehavior('player', e.target.checked)} />
-           Player — управление WASD / стрелки
+          🏃 Player — управление WASD / стрелки
         </label>
         <label style={labelStyle}>
-          <input type="checkbox" checked={behaviors.spin}
+          <input type="checkbox" checked={!!behaviors.float}
+            onChange={(e) => updateBehavior('float', e.target.checked)} />
+          🌊 Float — держаться на воде
+        </label>
+        <label style={labelStyle}>
+          <input type="checkbox" checked={!!behaviors.spin}
             onChange={(e) => updateBehavior('spin', e.target.checked)} />
           Spin — вращаться
         </label>
         <label style={labelStyle}>
-          <input type="checkbox" checked={behaviors.bounce}
+          <input type="checkbox" checked={!!behaviors.bounce}
             onChange={(e) => updateBehavior('bounce', e.target.checked)} />
           Bounce — прыгать
         </label>
         <label style={labelStyle}>
-          <input type="checkbox" checked={behaviors.patrol}
+          <input type="checkbox" checked={!!behaviors.patrol}
             onChange={(e) => updateBehavior('patrol', e.target.checked)} />
           Patrol — ходить туда-сюда
         </label>
