@@ -14,7 +14,6 @@ import {
   ExecuteCodeAction,
   GizmoManager,
   Quaternion,
-  PointerEventTypes,
   Mesh
 } from '@babylonjs/core'
 import { SceneObject } from './Editor'
@@ -127,7 +126,7 @@ export function Viewport(props: ViewportProps) {
         pointersInputRef.current = null
       }
     } catch {
-      // игнорируем ошибки управления камерой
+      // ignore
     }
   }, [props.terrainTool])
 
@@ -275,13 +274,52 @@ export function Viewport(props: ViewportProps) {
         const mesh = meshesRef.current.get(w.id)
         if (mesh) updateTerrainMesh(mesh, w.sub, w.size, w.heights, w.colors)
       } catch (err) {
-        console.error('sculpt error', err)
+        console.error('[terrain] sculpt error', err)
       }
     }
 
-    const commit = () => {
+    const pickAt = (clientX: number, clientY: number) => {
+      const canvas = canvasRef.current
+      if (!canvas) return null
+      const rect = canvas.getBoundingClientRect()
+      return scene.pick(clientX - rect.left, clientY - rect.top)
+    }
+
+    const onPointerDown = (e: PointerEvent) => {
+      const tool = toolRef.current
+      if (!tool || isPlayingRef.current || e.button !== 0) return
+      const w = terrainWorkRef.current
+      if (!w) {
+        console.log('[terrain] down: no terrain work')
+        return
+      }
+      const tm = meshesRef.current.get(w.id)
+      const pick = pickAt(e.clientX, e.clientY)
+      console.log('[terrain] down', {
+        tool,
+        hit: pick ? pick.hit : null,
+        picked: pick && pick.pickedMesh ? pick.pickedMesh.name : null,
+        want: tm ? tm.name : null
+      })
+      if (!pick || !pick.hit || !pick.pickedPoint || !tm) return
+      if (pick.pickedMesh !== tm) return
+      sculpting = true
+      flattenY = pick.pickedPoint.y
+      sculptAt(pick.pickedPoint)
+    }
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!sculpting) return
+      const pick = pickAt(e.clientX, e.clientY)
+      if (pick && pick.hit && pick.pickedPoint) sculptAt(pick.pickedPoint)
+    }
+
+    const onPointerUp = () => {
+      if (!sculpting) return
+      sculpting = false
       const w = terrainWorkRef.current
       if (w) {
+        console.log('[terrain] commit')
         commitTerrainRef.current(
           Array.from(w.heights, round2),
           Array.from(w.colors, round2)
@@ -289,39 +327,9 @@ export function Viewport(props: ViewportProps) {
       }
     }
 
-    const pointerObserver = scene.onPointerObservable.add((info) => {
-      const tool = toolRef.current
-      if (!tool || isPlayingRef.current) return
-      const w = terrainWorkRef.current
-      if (!w) return
-      const terrainMesh = meshesRef.current.get(w.id)
-      if (!terrainMesh) return
-      const pick = info.pickInfo
-      if (!pick || !pick.hit || !pick.pickedPoint) return
-      if (pick.pickedMesh !== terrainMesh) return
-
-      if (info.type === PointerEventTypes.POINTERDOWN) {
-        if ((info.event as PointerEvent).button !== 0) return
-        sculpting = true
-        flattenY = pick.pickedPoint.y
-        sculptAt(pick.pickedPoint)
-      } else if (info.type === PointerEventTypes.POINTERMOVE) {
-        if (sculpting) sculptAt(pick.pickedPoint)
-      } else if (info.type === PointerEventTypes.POINTERUP) {
-        if (sculpting) {
-          sculpting = false
-          commit()
-        }
-      }
-    })
-
-    const onWindowPointerUp = () => {
-      if (sculpting) {
-        sculpting = false
-        commit()
-      }
-    }
-    window.addEventListener('pointerup', onWindowPointerUp)
+    canvasRef.current.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
 
     const resizeObserver = new ResizeObserver(() => engine.resize())
     if (canvasRef.current.parentElement) resizeObserver.observe(canvasRef.current.parentElement)
@@ -423,8 +431,9 @@ export function Viewport(props: ViewportProps) {
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('pointerup', onWindowPointerUp)
-      scene.onPointerObservable.remove(pointerObserver)
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      canvasRef.current?.removeEventListener('pointerdown', onPointerDown)
       resizeObserver.disconnect()
       gizmoManager.dispose()
       engine.dispose()
@@ -473,6 +482,7 @@ export function Viewport(props: ViewportProps) {
 
         const material = new StandardMaterial(`material_${obj.id}`, scene)
         mesh.material = material
+        mesh.isPickable = true
 
         mesh.actionManager = new ActionManager(scene)
         mesh.actionManager.registerAction(
@@ -517,7 +527,9 @@ export function Viewport(props: ViewportProps) {
         let mesh = meshesRef.current.get(tObj.id)
         if (!mesh) {
           mesh = createTerrainMesh(scene, tObj.id, td.sub, td.size, heights, colors)
+          mesh.isPickable = true
           meshesRef.current.set(tObj.id, mesh)
+          console.log('[terrain] created mesh', mesh.name)
         } else {
           updateTerrainMesh(mesh, td.sub, td.size, heights, colors)
         }
