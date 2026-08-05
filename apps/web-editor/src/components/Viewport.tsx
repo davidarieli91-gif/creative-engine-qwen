@@ -14,6 +14,7 @@ import {
   ExecuteCodeAction,
   GizmoManager,
   Quaternion,
+  VertexData,
   Mesh
 } from '@babylonjs/core'
 import { SceneObject } from './Editor'
@@ -23,6 +24,7 @@ import {
   TerrainTool,
   applyBrush,
   createTerrainMesh,
+  buildTerrainGeometry,
   sampleHeight
 } from '../terrain'
 
@@ -53,6 +55,20 @@ function eulerToQuat(rot: { x: number; y: number; z: number }): Quaternion {
 function quatToEuler(q: Quaternion): { x: number; y: number; z: number } {
   const e = q.toEulerAngles()
   return { x: round2(deg(e.x)), y: round2(deg(e.y)), z: round2(deg(e.z)) }
+}
+
+function liveUpdateTerrain(
+  mesh: Mesh,
+  sub: number,
+  size: number,
+  heights: Float32Array,
+  colors: Float32Array
+) {
+  const geo = buildTerrainGeometry(sub, size, heights, colors)
+  mesh.setVerticesData(VertexData.PositionKind, geo.positions, false)
+  mesh.setVerticesData(VertexData.NormalKind, geo.normals, false)
+  mesh.setVerticesData(VertexData.ColorKind, geo.colors, false)
+  mesh.refreshBoundingInfo()
 }
 
 interface TerrainWork {
@@ -253,16 +269,6 @@ export function Viewport(props: ViewportProps) {
     let flattenY = 0
     let lastRefresh = 0
 
-    const refreshTerrain = () => {
-      const w = terrainWorkRef.current
-      if (!w) return
-      const old = meshesRef.current.get(w.id)
-      if (old) old.dispose()
-      const mesh = createTerrainMesh(scene, w.id, w.sub, w.size, w.heights, w.colors)
-      mesh.isPickable = true
-      meshesRef.current.set(w.id, mesh)
-    }
-
     const sculptAt = (p: Vector3) => {
       const w = terrainWorkRef.current
       const tool = toolRef.current
@@ -284,7 +290,8 @@ export function Viewport(props: ViewportProps) {
         const now = performance.now()
         if (now - lastRefresh > 50) {
           lastRefresh = now
-          refreshTerrain()
+          const mesh = meshesRef.current.get(w.id)
+          if (mesh) liveUpdateTerrain(mesh, w.sub, w.size, w.heights, w.colors)
         }
       } catch (err) {
         console.error('[terrain] sculpt error', err)
@@ -323,7 +330,8 @@ export function Viewport(props: ViewportProps) {
       sculpting = false
       const w = terrainWorkRef.current
       if (w) {
-        refreshTerrain()
+        const mesh = meshesRef.current.get(w.id)
+        if (mesh) liveUpdateTerrain(mesh, w.sub, w.size, w.heights, w.colors)
         commitTerrainRef.current(
           Array.from(w.heights, round2),
           Array.from(w.colors, round2)
@@ -528,11 +536,14 @@ export function Viewport(props: ViewportProps) {
       if (!w || w.id !== tObj.id || w.srcH !== td.heights || w.srcC !== td.colors) {
         const heights = Float32Array.from(td.heights)
         const colors = Float32Array.from(td.colors)
-        const old = meshesRef.current.get(tObj.id)
-        if (old) old.dispose()
-        const mesh = createTerrainMesh(scene, tObj.id, td.sub, td.size, heights, colors)
-        mesh.isPickable = true
-        meshesRef.current.set(tObj.id, mesh)
+        let mesh = meshesRef.current.get(tObj.id)
+        if (!mesh) {
+          mesh = createTerrainMesh(scene, tObj.id, td.sub, td.size, heights, colors)
+          mesh.isPickable = true
+          meshesRef.current.set(tObj.id, mesh)
+        } else {
+          liveUpdateTerrain(mesh, td.sub, td.size, heights, colors)
+        }
         terrainWorkRef.current = {
           id: tObj.id,
           sub: td.sub,
