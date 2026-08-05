@@ -11,6 +11,7 @@ export function exportGameHtml(objects: SceneObject[], logic: LogicData, title: 
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>${title}</title>
 <script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/materials/babylonjs.materials.js"></script>
 <style>
   html,body{margin:0;padding:0;overflow:hidden;height:100%;background:#111}
   #c{width:100%;height:100%;outline:none}
@@ -40,83 +41,86 @@ hemi.intensity = 0.5;
 var sun = new BABYLON.DirectionalLight('s', new BABYLON.Vector3(-1, -2, -1), scene);
 sun.intensity = 0.8;
 
-var hasTerrain = false, hasWater = false;
-for (var ti = 0; ti < DATA.objects.length; ti++) {
-  if (DATA.objects[ti].type === 'terrain') hasTerrain = true;
-  if (DATA.objects[ti].type === 'water') hasWater = true;
-}
-
-if (!hasTerrain) {
-  var g0 = BABYLON.MeshBuilder.CreateGround('g', { width: 40, height: 40 }, scene);
-  var gmat = new BABYLON.StandardMaterial('gm', scene);
-  gmat.diffuseColor = new BABYLON.Color3(0.25, 0.28, 0.25);
-  g0.material = gmat;
-}
-
-var terrainData = null;
+var terrainVox = null, terrainMat = null, terrainDim = null;
 var waterData = null;
 var waterMesh = null, waterBase = null, waterPositions = null, waterNormals = null, waterIndices = null;
+
+function b64(s) { var b = atob(s); var u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 
 function waveH(x, z, t, amp, speed) {
   if (amp <= 0) return 0;
   return amp * (0.5 * Math.sin(x * 0.18 + t * speed) + 0.3 * Math.sin(z * 0.23 + t * speed * 1.31) + 0.2 * Math.sin((x + z) * 0.11 + t * speed * 0.71));
 }
 
-function buildTerrain(o) {
-  var sub = o.terrain.sub, size = o.terrain.size;
-  var heights = o.terrain.heights, colors = o.terrain.colors;
-  var vcount = (sub + 1) * (sub + 1);
-  var positions = new Float32Array(vcount * 3);
-  var normals = new Float32Array(vcount * 3);
-  for (var row = 0; row <= sub; row++) {
-    for (var col = 0; col <= sub; col++) {
-      var i = row * (sub + 1) + col;
-      positions[i * 3] = (col / sub - 0.5) * size;
-      positions[i * 3 + 1] = heights[i];
-      positions[i * 3 + 2] = (row / sub - 0.5) * size;
+var PAL = [[0.36,0.55,0.3],[0.55,0.57,0.6],[0.85,0.76,0.54],[0.95,0.97,1],[0.45,0.33,0.22]];
+var FACES = [
+  { dir: [1,0,0], shade: 0.8, corners: [[1,0,0],[1,1,0],[1,1,1],[1,0,1]] },
+  { dir: [-1,0,0], shade: 0.7, corners: [[0,0,0],[0,0,1],[0,1,1],[0,1,0]] },
+  { dir: [0,1,0], shade: 1.0, corners: [[0,1,1],[1,1,1],[1,1,0],[0,1,0]] },
+  { dir: [0,-1,0], shade: 0.5, corners: [[0,0,0],[1,0,0],[1,0,1],[0,0,1]] },
+  { dir: [0,0,1], shade: 0.9, corners: [[0,0,1],[1,0,1],[1,1,1],[0,1,1]] },
+  { dir: [0,0,-1], shade: 0.6, corners: [[0,0,0],[0,1,0],[1,1,0],[1,0,0]] }
+];
+
+function buildVoxelTerrain(o) {
+  var td = o.terrain;
+  terrainVox = b64(td.voxels); terrainMat = b64(td.mats);
+  terrainDim = td;
+  var w = td.w, h = td.h, d = td.d, size = td.size;
+  var positions = [], normals = [], colors = [], indices = [];
+  for (var y = 0; y < h; y++) for (var z = 0; z < d; z++) for (var x = 0; x < w; x++) {
+    var i = (y * d + z) * w + x;
+    if (!terrainVox[i]) continue;
+    var pal = PAL[terrainMat[i]] || PAL[0];
+    for (var f = 0; f < 6; f++) {
+      var F = FACES[f];
+      var nx = x + F.dir[0], ny = y + F.dir[1], nz = z + F.dir[2];
+      if (ny < 0) continue;
+      if (nx >= 0 && ny >= 0 && nz >= 0 && nx < w && ny < h && nz < d && terrainVox[(ny * d + nz) * w + nx]) continue;
+      var base = positions.length / 3;
+      for (var c = 0; c < 4; c++) {
+        positions.push((x + F.corners[c][0] - w / 2) * size, (y + F.corners[c][1]) * size, (z + F.corners[c][2] - d / 2) * size);
+        normals.push(F.dir[0], F.dir[1], F.dir[2]);
+        colors.push(pal[0] * F.shade, pal[1] * F.shade, pal[2] * F.shade, 1);
+      }
+      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
     }
   }
-  var indices = [];
-  function fill(fl) {
-    indices.length = 0;
-    for (var r = 0; r < sub; r++) for (var c = 0; c < sub; c++) {
-      var a = r * (sub + 1) + c, b = a + 1, cc = a + sub + 1, d = cc + 1;
-      if (fl) indices.push(a, cc, b, b, cc, d); else indices.push(cc, a, b, b, d, cc);
-    }
-  }
-  fill(false);
-  BABYLON.VertexData.ComputeNormals(positions, indices, normals);
-  var mid = (Math.floor(sub / 2) * (sub + 1) + Math.floor(sub / 2)) * 3 + 1;
-  if (normals[mid] < 0) { fill(true); BABYLON.VertexData.ComputeNormals(positions, indices, normals); }
   var mesh = new BABYLON.Mesh('terrainMesh', scene);
   var vd = new BABYLON.VertexData();
   vd.positions = positions; vd.normals = normals; vd.indices = indices; vd.colors = colors;
   vd.applyToMesh(mesh, true);
   var mat = new BABYLON.StandardMaterial('tmat', scene);
   mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
+  mat.backFaceCulling = false;
   mesh.material = mat;
   return mesh;
 }
 
+function topHeight(x, z) {
+  if (!terrainVox) return 0;
+  var td = terrainDim;
+  var vx = Math.floor(x / td.size + td.w / 2);
+  var vz = Math.floor(z / td.size + td.d / 2);
+  if (vx < 0 || vz < 0 || vx >= td.w || vz >= td.d) return 0;
+  for (var y = td.h - 1; y >= 0; y--) if (terrainVox[(y * td.d + vz) * td.w + vx]) return (y + 1) * td.size;
+  return 0;
+}
+
 function buildWater(o) {
+  waterData = o.water;
   var wd = o.water;
-  waterData = wd;
   var sub = 64;
   var vcount = (sub + 1) * (sub + 1);
   waterPositions = new Float32Array(vcount * 3);
   waterNormals = new Float32Array(vcount * 3);
   waterBase = new Float32Array(vcount * 2);
-  for (var row = 0; row <= sub; row++) {
-    for (var col = 0; col <= sub; col++) {
-      var i = row * (sub + 1) + col;
-      var x = (col / sub - 0.5) * wd.size;
-      var z = (row / sub - 0.5) * wd.size;
-      waterPositions[i * 3] = x;
-      waterPositions[i * 3 + 1] = wd.level;
-      waterPositions[i * 3 + 2] = z;
-      waterBase[i * 2] = x;
-      waterBase[i * 2 + 1] = z;
-    }
+  for (var row = 0; row <= sub; row++) for (var col = 0; col <= sub; col++) {
+    var i = row * (sub + 1) + col;
+    var x = (col / sub - 0.5) * wd.size;
+    var z = (row / sub - 0.5) * wd.size;
+    waterPositions[i * 3] = x; waterPositions[i * 3 + 1] = wd.level; waterPositions[i * 3 + 2] = z;
+    waterBase[i * 2] = x; waterBase[i * 2 + 1] = z;
   }
   waterIndices = [];
   function fill(fl) {
@@ -134,29 +138,40 @@ function buildWater(o) {
   var vd = new BABYLON.VertexData();
   vd.positions = waterPositions; vd.normals = waterNormals; vd.indices = waterIndices;
   vd.applyToMesh(waterMesh, true);
-  var mat = new BABYLON.StandardMaterial('wmat', scene);
-  mat.diffuseColor = BABYLON.Color3.FromHexString(wd.color || '#1e6fd8');
-  mat.specularColor = new BABYLON.Color3(0.7, 0.9, 1);
-  mat.alpha = 0.72;
-  mat.backFaceCulling = false;
+  var mat = null;
+  try {
+    var wm = new BABYLON.MaterialsLibrary.WaterMaterial('wmat', scene);
+    var noise = new BABYLON.NoiseProceduralTexture('wbn', 256, scene);
+    noise.animationSpeedEnabled = true;
+    wm.bumpTexture = noise;
+    wm.windForce = 5 + wd.waveSpeed * 15;
+    wm.waveLength = 0.4;
+    wm.timeScale = wd.waveSpeed;
+    wm.bumpLevel = 2;
+    wm.alpha = 0.85;
+    mat = wm;
+  } catch (e) {
+    var sm = new BABYLON.StandardMaterial('wmat', scene);
+    sm.diffuseColor = BABYLON.Color3.FromHexString(wd.color || '#1e6fd8');
+    sm.alpha = 0.72;
+    sm.backFaceCulling = false;
+    mat = sm;
+  }
   waterMesh.material = mat;
 }
 
-function sampleTerrain(x, z) {
-  if (!terrainData) return 0;
-  var sub = terrainData.sub, size = terrainData.size, h = terrainData.heights;
-  var gx = Math.min(Math.max((x / size + 0.5) * sub, 0), sub - 0.0001);
-  var gz = Math.min(Math.max((z / size + 0.5) * sub, 0), sub - 0.0001);
-  var c0 = Math.floor(gx), r0 = Math.floor(gz);
-  var fx = gx - c0, fz = gz - r0;
-  var i = r0 * (sub + 1) + c0;
-  var h00 = h[i], h10 = h[i + 1], h01 = h[i + sub + 1], h11 = h[i + sub + 2];
-  return h00 + (h10 - h00) * fx + (h01 - h00) * fz + (h00 - h10 - h01 + h11) * fx * fz;
+var hasTerrain = false;
+for (var ti = 0; ti < DATA.objects.length; ti++) if (DATA.objects[ti].type === 'terrain') hasTerrain = true;
+if (!hasTerrain) {
+  var g0 = BABYLON.MeshBuilder.CreateGround('g', { width: 40, height: 40 }, scene);
+  var gmat = new BABYLON.StandardMaterial('gm', scene);
+  gmat.diffuseColor = new BABYLON.Color3(0.25, 0.28, 0.25);
+  g0.material = gmat;
 }
 
 var meshes = {};
 DATA.objects.forEach(function (o) {
-  if (o.type === 'terrain') { terrainData = o.terrain; meshes[o.id] = buildTerrain(o); return; }
+  if (o.type === 'terrain') { meshes[o.id] = buildVoxelTerrain(o); return; }
   if (o.type === 'water') { buildWater(o); meshes[o.id] = waterMesh; return; }
   var m;
   if (o.type === 'cube') m = BABYLON.MeshBuilder.CreateBox(o.id, { size: 1 }, scene);
@@ -200,16 +215,8 @@ function buildChains(lg) {
 }
 var chains = buildChains(DATA.logic);
 
-var score = 0;
-var keys = {};
-var fired = {};
-var timers = {};
-var sinkTarget = {};
-var sinkProg = {};
-var floatVel = {};
-var startTime = performance.now();
-var last = startTime;
-var lastWater = 0;
+var score = 0, keys = {}, fired = {}, timers = {}, sinkTarget = {}, sinkProg = {}, floatVel = {};
+var startTime = performance.now(), last = startTime, lastWater = 0;
 
 function hud() { document.getElementById('score').textContent = '🏆 ' + score; }
 function msg(t) {
@@ -320,11 +327,8 @@ engine.runRenderLoop(function () {
           pm.rotationQuaternion = BABYLON.Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0);
         }
       }
-      if (terrainData && !(playerObj.behaviors && playerObj.behaviors.bounce) && !(playerObj.behaviors && playerObj.behaviors.float)) {
-        var half = terrainData.size / 2;
-        if (Math.abs(pm.position.x) < half && Math.abs(pm.position.z) < half) {
-          pm.position.y = sampleTerrain(pm.position.x, pm.position.z) + 0.5;
-        }
+      if (terrainVox && !(playerObj.behaviors && playerObj.behaviors.bounce) && !(playerObj.behaviors && playerObj.behaviors.float)) {
+        pm.position.y = topHeight(pm.position.x, pm.position.z) + 0.5;
       }
       camera.target.copyFrom(pm.position);
       camera.target.y += 0.5;
