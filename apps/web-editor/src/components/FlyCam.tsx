@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Scene, FreeCamera, Vector3, Ray } from '@babylonjs/core'
+import { Scene, Engine, FreeCamera, Vector3, Ray } from '@babylonjs/core'
 
 interface FlyCamProps { isPlaying: boolean }
 
 export function FlyCam({ isPlaying }: FlyCamProps) {
   const [flyOn, setFlyOn] = useState(false)
   const [collision, setCollision] = useState(true)
+  const [ready, setReady] = useState(false)
   const sceneRef = useRef<Scene | null>(null)
   const camRef = useRef<FreeCamera | null>(null)
   const orbitRef = useRef<any>(null)
@@ -23,14 +24,38 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
     let tries = 0
     const iv = setInterval(() => {
       tries++
-      const sc = (Scene as any).Instances?.find((s: any) => s.getEngine && s.getEngine().getRenderingCanvas && s.getEngine().getRenderingCanvas())
+      let sc: any = null
+      try {
+        sc = (Scene as any).Instances && (Scene as any).Instances.find(
+          (s: any) => s && s.getEngine && s.getEngine().getRenderingCanvas && s.getEngine().getRenderingCanvas()
+        )
+      } catch { /* ignore */ }
+      if (!sc) {
+        try {
+          const eng: any = (Engine as any).Instances && (Engine as any).Instances[0]
+          if (eng && eng.scenes && eng.scenes.length) sc = eng.scenes[0]
+        } catch { /* ignore */ }
+      }
+      if (!sc) {
+        try {
+          const cv = document.querySelector('canvas')
+          if (cv && (cv as any)._scene) sc = (cv as any)._scene
+        } catch { /* ignore */ }
+      }
       if (sc) {
         sceneRef.current = sc
-        const fc = new FreeCamera('flyCam', new Vector3(0, 20, -30), sc)
-        fc.minZ = 0.1
-        camRef.current = fc
+        if (!camRef.current) {
+          const fc = new FreeCamera('flyCam', new Vector3(0, 20, -30), sc)
+          fc.minZ = 0.1
+          camRef.current = fc
+        }
+        console.log('[flycam] scene ready')
+        setReady(true)
         clearInterval(iv)
-      } else if (tries > 50) clearInterval(iv)
+      } else if (tries > 100) {
+        console.log('[flycam] scene NOT found')
+        clearInterval(iv)
+      }
     }, 100)
     return () => clearInterval(iv)
   }, [])
@@ -42,9 +67,11 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
   useEffect(() => {
     const sc = sceneRef.current
     const fc = camRef.current
-    if (!sc || !fc) return
+    if (!sc || !fc || !ready) return
     const st = stRef.current
+
     if (flyOn && !isPlaying) {
+      console.log('[flycam] enable')
       const orbit: any = sc.activeCamera
       orbitRef.current = orbit
       st.pos = orbit.position.clone()
@@ -62,6 +89,7 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
       } catch { /* ignore */ }
       sc.activeCamera = fc
     } else {
+      console.log('[flycam] disable')
       const orbit = orbitRef.current
       if (orbit) {
         const cp = Math.cos(st.pitch)
@@ -75,10 +103,10 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
         sc.activeCamera = orbit
       }
     }
-  }, [flyOn, isPlaying])
+  }, [flyOn, isPlaying, ready])
 
   useEffect(() => {
-    if (!flyOn || isPlaying) return
+    if (!flyOn || isPlaying || !ready) return
     const sc = sceneRef.current
     const fc = camRef.current
     if (!sc || !fc) return
@@ -159,7 +187,7 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
       canvas.removeEventListener('wheel', onWheel)
       canvas.removeEventListener('contextmenu', onCtx)
     }
-  }, [flyOn, isPlaying])
+  }, [flyOn, isPlaying, ready])
 
   return (
     <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', gap: 6, zIndex: 5 }}>
@@ -168,7 +196,9 @@ export function FlyCam({ isPlaying }: FlyCamProps) {
           onClick={() => setCollision(!collision)} title="Столкновения с землёй и водой">🛡</button>
       )}
       <button className="btn" style={{ background: flyOn ? '#16825d' : '#3e3e42' }}
-        onClick={() => setFlyOn(!flyOn)}>🎥 Полёт</button>
+        onClick={() => { console.log('[flycam] click, ready =', ready); setFlyOn(!flyOn) }}>
+        🎥 Полёт
+      </button>
       {flyOn && (
         <span style={{ color: '#bbb', fontSize: 11, alignSelf: 'center', background: 'rgba(0,0,0,.45)', padding: '3px 8px', borderRadius: 6 }}>
           ПКМ — смотреть · WASD/E/Q — лететь · Shift ×3 · колесо — скорость
