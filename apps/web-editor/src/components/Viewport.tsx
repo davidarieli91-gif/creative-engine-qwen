@@ -14,7 +14,6 @@ import {
   ExecuteCodeAction,
   GizmoManager,
   Quaternion,
-  VertexData,
   Mesh
 } from '@babylonjs/core'
 import { SceneObject } from './Editor'
@@ -65,9 +64,9 @@ function liveUpdateTerrain(
   colors: Float32Array
 ) {
   const geo = buildTerrainGeometry(sub, size, heights, colors)
-  mesh.setVerticesData(VertexData.PositionKind, geo.positions, false)
-  mesh.setVerticesData(VertexData.NormalKind, geo.normals, false)
-  mesh.setVerticesData(VertexData.ColorKind, geo.colors, false)
+  mesh.setVerticesData('position', geo.positions, false)
+  mesh.setVerticesData('normal', geo.normals, false)
+  mesh.setVerticesData('color', geo.colors, false)
   mesh.refreshBoundingInfo()
 }
 
