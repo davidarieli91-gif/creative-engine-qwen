@@ -14,6 +14,7 @@ import {
   ExecuteCodeAction,
   GizmoManager,
   Quaternion,
+  VertexData,
   Mesh
 } from '@babylonjs/core'
 import { SceneObject } from './Editor'
@@ -56,6 +57,16 @@ function quatToEuler(q: Quaternion): { x: number; y: number; z: number } {
   return { x: round2(deg(e.x)), y: round2(deg(e.y)), z: round2(deg(e.z)) }
 }
 
+function waveH(x: number, z: number, t: number, amp: number, speed: number): number {
+  if (amp <= 0) return 0
+  return (
+    amp *
+    (0.5 * Math.sin(x * 0.18 + t * speed) +
+      0.3 * Math.sin(z * 0.23 + t * speed * 1.31) +
+      0.2 * Math.sin((x + z) * 0.11 + t * speed * 0.71))
+  )
+}
+
 function liveUpdateTerrain(
   mesh: Mesh,
   sub: number,
@@ -80,6 +91,17 @@ interface TerrainWork {
   srcC: number[]
 }
 
+interface WaterWork {
+  id: string
+  sub: number
+  size: number
+  mesh: Mesh
+  base: Float32Array
+  positions: Float32Array
+  normals: Float32Array
+  indices: number[]
+}
+
 export function Viewport(props: ViewportProps) {
   const { objects, selectedObject, onSelect, onUpdate, isPlaying, gizmoMode, logic, onHud } = props
 
@@ -91,6 +113,11 @@ export function Viewport(props: ViewportProps) {
   const pointersInputRef = useRef<any>(null)
   const meshesRef = useRef<Map<string, Mesh>>(new Map())
   const terrainWorkRef = useRef<TerrainWork | null>(null)
+  const waterWorkRef = useRef<WaterWork | null>(null)
+  const waterDataRef = useRef<{ level: number; waveHeight: number; waveSpeed: number } | null>(null)
+  const floatVelRef = useRef<Map<string, number>>(new Map())
+  const sinkProgRef = useRef<Map<string, number>>(new Map())
+  const sinkTargetRef = useRef<Map<string, number>>(new Map())
   const objectsRef = useRef<SceneObject[]>(objects)
   const selectedRef = useRef<SceneObject | null>(selectedObject)
   const onSelectRef = useRef(onSelect)
@@ -101,6 +128,7 @@ export function Viewport(props: ViewportProps) {
   const keysRef = useRef<Set<string>>(new Set())
   const playStartRef = useRef(0)
   const lastTsRef = useRef(0)
+  const lastWaterRef = useRef(0)
   const gizmoModeRef = useRef<GizmoMode>('position')
   const chainsRef = useRef<{ event: LogicNode; actions: LogicNode[] }[]>([])
   const touchFiredRef = useRef<Set<string>>(new Set())
@@ -175,6 +203,14 @@ export function Viewport(props: ViewportProps) {
           }
           break
         }
+        case 'sink': {
+          if (d.objectId) sinkTargetRef.current.set(d.objectId, 1)
+          break
+        }
+        case 'float': {
+          if (d.objectId) sinkTargetRef.current.set(d.objectId, 0)
+          break
+        }
       }
     })
   }
@@ -190,6 +226,9 @@ export function Viewport(props: ViewportProps) {
       scoreRef.current = 0
       touchFiredRef.current.clear()
       timerAccRef.current.clear()
+      sinkTargetRef.current.clear()
+      sinkProgRef.current.clear()
+      floatVelRef.current.clear()
       chainsRef.current = buildChains(logicRef.current)
       chainsRef.current
         .filter((c) => c.event.data.type === 'start')
@@ -203,7 +242,7 @@ export function Viewport(props: ViewportProps) {
       })
       runtimeHiddenRef.current.clear()
       objectsRef.current.forEach((obj) => {
-        if (obj.type === 'terrain') return
+        if (obj.type === 'terrain' || obj.type === 'water') return
         const mesh = meshesRef.current.get(obj.id)
         if (!mesh) return
         mesh.position.set(obj.position.x, obj.position.y, obj.position.z)
@@ -346,6 +385,23 @@ export function Viewport(props: ViewportProps) {
     if (canvasRef.current.parentElement) resizeObserver.observe(canvasRef.current.parentElement)
 
     engine.runRenderLoop(() => {
+      const nowAll = performance.now()
+      const tAll = nowAll / 1000
+
+      const ww = waterWorkRef.current
+      const wd = waterDataRef.current
+      if (ww && wd && nowAll - lastWaterRef.current > 33) {
+        lastWaterRef.current = nowAll
+        const vcount = ww.positions.length / 3
+        for (let i = 0; i < vcount; i++) {
+          ww.positions[i * 3 + 1] =
+            wd.level + waveH(ww.base[i * 2], ww.base[i * 2 + 1], tAll, wd.waveHeight, wd.waveSpeed)
+        }
+        VertexData.ComputeNormals(ww.positions, ww.indices, ww.normals)
+        ww.mesh.updateVerticesData('position', ww.positions)
+        ww.mesh.updateVerticesData('normal', ww.normals)
+      }
+
       if (isPlayingRef.current) {
         const now = performance.now()
         const dt = Math.min(0.1, (now - lastTsRef.current) / 1000)
@@ -354,6 +410,43 @@ export function Viewport(props: ViewportProps) {
 
         const w = terrainWorkRef.current
         const playerObj = objectsRef.current.find((o) => o.behaviors?.player)
+
+        if (wd) {
+          objectsRef.current.forEach((obj) => {
+            if (obj.type === 'terrain' || obj.type === 'water') return
+            if (!obj.behaviors?.float) return
+            const mesh = meshesRef.current.get(obj.id)
+            if (!mesh || !mesh.isEnabled()) return
+
+            const target = sinkTargetRef.current.get(obj.id) ?? 0
+            const p0 = sinkProgRef.current.get(obj.id) ?? 0
+            const p = p0 + (target - p0) * Math.min(1, dt * 0.4)
+            sinkProgRef.current.set(obj.id, p)
+
+            const x = mesh.position.x
+            const z = mesh.position.z
+            const h = wd.level + waveH(x, z, t, wd.waveHeight, wd.waveSpeed)
+            const targetY = h + obj.scale.y * 0.3 - p * (obj.scale.y * 0.5 + 2.5)
+
+            let vy = floatVelRef.current.get(obj.id) ?? 0
+            vy += (targetY - mesh.position.y) * 8 * dt
+            vy *= Math.max(0, 1 - 2.5 * dt)
+            mesh.position.y += vy
+            floatVelRef.current.set(obj.id, vy)
+
+            if (!obj.behaviors?.player) {
+              const d = 1.5
+              const hx =
+                waveH(x + d, z, t, wd.waveHeight, wd.waveSpeed) -
+                waveH(x - d, z, t, wd.waveHeight, wd.waveSpeed)
+              const hz =
+                waveH(x, z + d, t, wd.waveHeight, wd.waveSpeed) -
+                waveH(x, z - d, t, wd.waveHeight, wd.waveSpeed)
+              mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(0, hz * 0.12, -hx * 0.12)
+            }
+          })
+        }
+
         if (playerObj) {
           const playerMesh = meshesRef.current.get(playerObj.id)
           if (playerMesh && playerMesh.isEnabled()) {
@@ -372,13 +465,13 @@ export function Viewport(props: ViewportProps) {
             if (move.lengthSquared() > 0) {
               move.normalize().scaleInPlace(0.12)
               playerMesh.position.addInPlace(move)
-              playerMesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(
-                Math.atan2(move.x, move.z),
-                0,
-                0
-              )
+              if (!playerObj.behaviors?.float) {
+                playerMesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(
+                  Math.atan2(move.x, move.z), 0, 0
+                )
+              }
             }
-            if (w && !playerObj.behaviors?.bounce) {
+            if (w && !playerObj.behaviors?.bounce && !playerObj.behaviors?.float) {
               const half = w.size / 2
               if (Math.abs(playerMesh.position.x) < half && Math.abs(playerMesh.position.z) < half) {
                 playerMesh.position.y =
@@ -391,12 +484,12 @@ export function Viewport(props: ViewportProps) {
         }
 
         objectsRef.current.forEach((obj) => {
-          if (obj.type === 'terrain') return
+          if (obj.type === 'terrain' || obj.type === 'water') return
           const mesh = meshesRef.current.get(obj.id)
           if (!mesh || !mesh.isEnabled()) return
           const b = obj.behaviors
           if (b?.spin) mesh.rotate(Vector3.Up(), 0.03)
-          if (b?.bounce) mesh.position.y = obj.position.y + Math.abs(Math.sin(t * 3)) * 1.5
+          if (b?.bounce && !b?.float) mesh.position.y = obj.position.y + Math.abs(Math.sin(t * 3)) * 1.5
           if (b?.patrol && !b?.player) mesh.position.x = obj.position.x + Math.sin(t * 1.5) * 2
         })
 
@@ -453,6 +546,7 @@ export function Viewport(props: ViewportProps) {
       gizmoRef.current = null
       groundRef.current = null
       terrainWorkRef.current = null
+      waterWorkRef.current = null
       meshesRef.current.clear()
     }
   }, [])
@@ -471,7 +565,7 @@ export function Viewport(props: ViewportProps) {
     })
 
     objects.forEach((obj) => {
-      if (obj.type === 'terrain') return
+      if (obj.type === 'terrain' || obj.type === 'water') return
 
       let mesh = meshesRef.current.get(obj.id)
 
@@ -544,17 +638,88 @@ export function Viewport(props: ViewportProps) {
           liveUpdateTerrain(mesh, td.sub, td.size, heights, colors)
         }
         terrainWorkRef.current = {
-          id: tObj.id,
-          sub: td.sub,
-          size: td.size,
-          heights,
-          colors,
-          srcH: td.heights,
-          srcC: td.colors
+          id: tObj.id, sub: td.sub, size: td.size, heights, colors,
+          srcH: td.heights, srcC: td.colors
         }
       }
     } else if (terrainWorkRef.current) {
       terrainWorkRef.current = null
+    }
+
+    const wObj = objects.find((o) => o.type === 'water')
+    if (wObj && wObj.water) {
+      const wd = wObj.water
+      waterDataRef.current = { level: wd.level, waveHeight: wd.waveHeight, waveSpeed: wd.waveSpeed }
+      let ww = waterWorkRef.current
+      if (!ww || ww.id !== wObj.id || ww.size !== wd.size) {
+        if (ww) {
+          ww.mesh.dispose()
+          meshesRef.current.delete(ww.id)
+        }
+        const sub = 64
+        const vcount = (sub + 1) * (sub + 1)
+        const positions = new Float32Array(vcount * 3)
+        const normals = new Float32Array(vcount * 3)
+        const base = new Float32Array(vcount * 2)
+        for (let row = 0; row <= sub; row++) {
+          for (let col = 0; col <= sub; col++) {
+            const i = row * (sub + 1) + col
+            const x = (col / sub - 0.5) * wd.size
+            const z = (row / sub - 0.5) * wd.size
+            positions[i * 3] = x
+            positions[i * 3 + 1] = wd.level
+            positions[i * 3 + 2] = z
+            base[i * 2] = x
+            base[i * 2 + 1] = z
+          }
+        }
+        const indices: number[] = []
+        const fill = (flipped: boolean) => {
+          indices.length = 0
+          for (let row = 0; row < sub; row++) {
+            for (let col = 0; col < sub; col++) {
+              const a = row * (sub + 1) + col
+              const b = a + 1
+              const c = a + sub + 1
+              const d = c + 1
+              if (flipped) indices.push(a, c, b, b, c, d)
+              else indices.push(c, a, b, b, d, c)
+            }
+          }
+        }
+        fill(false)
+        VertexData.ComputeNormals(positions, indices, normals)
+        const mid = (Math.floor(sub / 2) * (sub + 1) + Math.floor(sub / 2)) * 3 + 1
+        if (normals[mid] < 0) {
+          fill(true)
+          VertexData.ComputeNormals(positions, indices, normals)
+        }
+        const mesh = new Mesh(wObj.id, scene)
+        const vd = new VertexData()
+        vd.positions = positions
+        vd.normals = normals
+        vd.indices = indices
+        vd.applyToMesh(mesh, true)
+        const mat = new StandardMaterial('wm_' + wObj.id, scene)
+        mat.diffuseColor = Color3.FromHexString(wd.color || '#1e6fd8')
+        mat.specularColor = new Color3(0.7, 0.9, 1)
+        mat.alpha = 0.72
+        mat.backFaceCulling = false
+        mesh.material = mat
+        meshesRef.current.set(wObj.id, mesh)
+        ww = { id: wObj.id, sub, size: wd.size, mesh, base, positions, normals, indices }
+        waterWorkRef.current = ww
+      } else {
+        const mat = ww.mesh.material as StandardMaterial
+        mat.diffuseColor = Color3.FromHexString(wd.color || '#1e6fd8')
+      }
+    } else {
+      waterDataRef.current = null
+      if (waterWorkRef.current) {
+        waterWorkRef.current.mesh.dispose()
+        meshesRef.current.delete(waterWorkRef.current.id)
+        waterWorkRef.current = null
+      }
     }
   }, [objects, selectedObject])
 
@@ -562,7 +727,7 @@ export function Viewport(props: ViewportProps) {
     const gm = gizmoRef.current
     if (!gm) return
 
-    if (isPlaying || !selectedObject || selectedObject.type === 'terrain') {
+    if (isPlaying || !selectedObject || selectedObject.type === 'terrain' || selectedObject.type === 'water') {
       gm.attachToMesh(null)
       return
     }
