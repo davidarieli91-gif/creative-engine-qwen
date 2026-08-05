@@ -70,6 +70,16 @@ function LogicNodeCard(props: NodeProps) {
           ))}
         </select>
       )}
+            {data.type === 'sound' && (
+        <select style={sel} value={data.message ?? 'coin'} onChange={(e) => update({ message: e.target.value })}>
+          <option value="coin">🪙 Монета</option>
+          <option value="jump">🦘 Прыжок</option>
+          <option value="click">🖱 Клик</option>
+          <option value="boom">💥 Взрыв</option>
+          <option value="win">🏆 Победа</option>
+          <option value="lose">😿 Поражение</option>
+        </select>
+      )}
       {data.type === 'score' && (
         <input style={sel} type="number" value={data.value ?? 1}
           onChange={(e) => update({ value: parseFloat(e.target.value) || 0 })} />
