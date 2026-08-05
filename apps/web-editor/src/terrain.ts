@@ -117,7 +117,6 @@ export function applyBrush(
       if (dist > radius) continue
       const fall = smooth(1 - dist / radius)
       const i = row * (sub + 1) + col
-
       if (tool === 'raise') heights[i] += strength * fall
       else if (tool === 'lower') heights[i] -= strength * fall
       else if (tool === 'smooth') {
@@ -206,8 +205,252 @@ export function updateTerrainMesh(
   colors: Float32Array
 ) {
   const geo = buildTerrainGeometry(sub, size, heights, colors)
-  mesh.setVerticesData(VertexData.PositionKind, geo.positions, false)
-  mesh.setVerticesData(VertexData.NormalKind, geo.normals, false)
-  mesh.setVerticesData(VertexData.ColorKind, geo.colors, false)
+  mesh.setVerticesData('position', geo.positions, false)
+  mesh.setVerticesData('normal', geo.normals, false)
+  mesh.setVerticesData('color', geo.colors, false)
   mesh.refreshBoundingInfo()
+}
+
+// ================= ВОКСЕЛИ (Terrain v2) =================
+
+export interface VoxelTerrainData {
+  w: number
+  h: number
+  d: number
+  size: number
+  voxels: string
+  mats: string
+}
+
+export const VOX_PALETTE: number[][] = [
+  [0.36, 0.55, 0.3],
+  [0.55, 0.57, 0.6],
+  [0.85, 0.76, 0.54],
+  [0.95, 0.97, 1.0],
+  [0.45, 0.33, 0.22]
+]
+
+export function bytesToB64(u8: Uint8Array): string {
+  let s = ''
+  const CH = 0x8000
+  for (let i = 0; i < u8.length; i += CH) {
+    s += String.fromCharCode.apply(null, Array.prototype.slice.call(u8.subarray(i, i + CH)))
+  }
+  return btoa(s)
+}
+
+export function b64ToBytes(s: string): Uint8Array {
+  const bin = atob(s)
+  const u = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i)
+  return u
+}
+
+export function createVoxelField(w: number, h: number, d: number) {
+  return { vox: new Uint8Array(w * h * d), mat: new Uint8Array(w * h * d) }
+}
+
+export function matForHeight(y: number, h: number): number {
+  if (y < 2) return 2
+  if (y > h * 0.72) return 3
+  if (y > h * 0.5) return 1
+  return 0
+}
+
+export function generateVoxelHills(
+  vox: Uint8Array, mat: Uint8Array,
+  w: number, h: number, d: number, size: number, amp: number, seed: number
+) {
+  for (let z = 0; z < d; z++) {
+    for (let x = 0; x < w; x++) {
+      const wx = (x / w - 0.5) * w * size
+      const wz = (z / d - 0.5) * d * size
+      const n = fbm(wx * 0.06, wz * 0.06, seed, 4)
+      let hgt = Math.floor(h * 0.35 + (n - 0.45) * 2 * amp)
+      hgt = Math.max(1, Math.min(h - 1, hgt))
+      for (let y = 0; y < hgt; y++) {
+        const i = (y * d + z) * w + x
+        vox[i] = 1
+        mat[i] = y < hgt - 4 ? (y < 2 ? 2 : 4) : matForHeight(hgt, h)
+      }
+    }
+  }
+}
+
+export function colHeight(vox: Uint8Array, w: number, h: number, d: number, x: number, z: number): number {
+  for (let y = h - 1; y >= 0; y--) {
+    if (vox[(y * d + z) * w + x]) return y + 1
+  }
+  return 0
+}
+
+function setColumn(
+  vox: Uint8Array, mat: Uint8Array,
+  w: number, h: number, d: number, x: number, z: number, t: number
+) {
+  for (let y = 0; y < h; y++) {
+    const i = (y * d + z) * w + x
+    if (y < t) {
+      vox[i] = 1
+      mat[i] = matForHeight(t, h)
+    } else vox[i] = 0
+  }
+}
+
+function isSurface(vox: Uint8Array, w: number, h: number, d: number, x: number, y: number, z: number): boolean {
+  const nb = [
+    [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]
+  ]
+  for (const n of nb) {
+    const nx = x + n[0], ny = y + n[1], nz = z + n[2]
+    if (nx < 0 || ny < 0 || nz < 0 || nx >= w || ny >= h || nz >= d) return true
+    if (!vox[(ny * d + nz) * w + nx]) return true
+  }
+  return false
+}
+
+export function applyVoxelBrush(
+  vox: Uint8Array, mat: Uint8Array,
+  w: number, h: number, d: number, size: number,
+  cx: number, cy: number, cz: number,
+  radius: number, tool: TerrainTool, paintId: number
+) {
+  const r = Math.ceil(radius)
+  const bx = Math.floor(cx / size + w / 2)
+  const by = Math.floor(cy / size)
+  const bz = Math.floor(cz / size + d / 2)
+
+  if (tool === 'smooth' || tool === 'flatten') {
+    for (let z = Math.max(0, bz - r); z <= Math.min(d - 1, bz + r); z++) {
+      for (let x = Math.max(0, bx - r); x <= Math.min(w - 1, bx + r); x++) {
+        const dx = x - bx
+        const dz = z - bz
+        if (dx * dx + dz * dz > r * r) continue
+        const ht = colHeight(vox, w, h, d, x, z)
+        let target = ht
+        if (tool === 'smooth') {
+          const h1 = colHeight(vox, w, h, d, Math.max(0, x - 1), z)
+          const h2 = colHeight(vox, w, h, d, Math.min(w - 1, x + 1), z)
+          const h3 = colHeight(vox, w, h, d, x, Math.max(0, z - 1))
+          const h4 = colHeight(vox, w, h, d, x, Math.min(d - 1, z + 1))
+          target = (ht + h1 + h2 + h3 + h4) / 5
+        } else {
+          target = by + 1
+        }
+        setColumn(vox, mat, w, h, d, x, z, Math.max(0, Math.min(h, Math.round(target))))
+      }
+    }
+    return
+  }
+
+  for (let y = Math.max(0, by - r); y <= Math.min(h - 1, by + r); y++) {
+    for (let z = Math.max(0, bz - r); z <= Math.min(d - 1, bz + r); z++) {
+      for (let x = Math.max(0, bx - r); x <= Math.min(w - 1, bx + r); x++) {
+        const dx = x - bx
+        const dy = y - by
+        const dz = z - bz
+        if (dx * dx + dy * dy + dz * dz > radius * radius) continue
+        const i = (y * d + z) * w + x
+        if (tool === 'raise') {
+          if (!vox[i]) {
+            vox[i] = 1
+            mat[i] = matForHeight(y, h)
+          }
+        } else if (tool === 'lower') {
+          vox[i] = 0
+        } else if (tool === 'paint') {
+          if (vox[i] && isSurface(vox, w, h, d, x, y, z)) mat[i] = paintId
+        }
+      }
+    }
+  }
+}
+
+export function topHeightAt(
+  vox: Uint8Array, w: number, h: number, d: number, size: number, x: number, z: number
+): number {
+  const vx = Math.floor(x / size + w / 2)
+  const vz = Math.floor(z / size + d / 2)
+  if (vx < 0 || vz < 0 || vx >= w || vz >= d) return 0
+  return colHeight(vox, w, h, d, vx, vz) * size
+}
+
+export function heightmapToVoxels(td: TerrainData): VoxelTerrainData {
+  const w = 64
+  const d = 64
+  const h = 32
+  const size = td.size / w
+  const { vox, mat } = createVoxelField(w, h, d)
+  const hf = Float32Array.from(td.heights)
+  for (let z = 0; z < d; z++) {
+    for (let x = 0; x < w; x++) {
+      const wx = (x / w - 0.5) * td.size
+      const wz = (z / d - 0.5) * td.size
+      const hgt = Math.max(1, Math.min(h - 1, Math.round((sampleHeight(hf, td.sub, td.size, wx, wz) + 8) / size)))
+      for (let y = 0; y < hgt; y++) {
+        const i = (y * d + z) * w + x
+        vox[i] = 1
+        mat[i] = matForHeight(hgt, h)
+      }
+    }
+  }
+  return { w, h, d, size, voxels: bytesToB64(vox), mats: bytesToB64(mat) }
+}
+
+const FACES = [
+  { dir: [1, 0, 0], shade: 0.8, corners: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]] },
+  { dir: [-1, 0, 0], shade: 0.7, corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]] },
+  { dir: [0, 1, 0], shade: 1.0, corners: [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]] },
+  { dir: [0, -1, 0], shade: 0.5, corners: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]] },
+  { dir: [0, 0, 1], shade: 0.9, corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]] },
+  { dir: [0, 0, -1], shade: 0.6, corners: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]] }
+]
+
+export function buildVoxelGeometry(
+  vox: Uint8Array, mat: Uint8Array, w: number, h: number, d: number, size: number
+) {
+  const positions: number[] = []
+  const normals: number[] = []
+  const colors: number[] = []
+  const indices: number[] = []
+
+  for (let y = 0; y < h; y++) {
+    for (let z = 0; z < d; z++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * d + z) * w + x
+        if (!vox[i]) continue
+        const pal = VOX_PALETTE[mat[i]] || VOX_PALETTE[0]
+        for (const f of FACES) {
+          const nx = x + f.dir[0]
+          const ny = y + f.dir[1]
+          const nz = z + f.dir[2]
+          if (ny < 0) continue
+          if (nx >= 0 && ny >= 0 && nz >= 0 && nx < w && ny < h && nz < d && vox[(ny * d + nz) * w + nx]) continue
+          const base = positions.length / 3
+          for (const c of f.corners) {
+            positions.push((x + c[0] - w / 2) * size, (y + c[1]) * size, (z + c[2] - d / 2) * size)
+            normals.push(f.dir[0], f.dir[1], f.dir[2])
+            colors.push(pal[0] * f.shade, pal[1] * f.shade, pal[2] * f.shade, 1)
+          }
+          indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
+        }
+      }
+    }
+  }
+  return { positions, normals, colors, indices }
+}
+
+export function createVoxelMesh(scene: Scene, id: string, geo: any): Mesh {
+  const mesh = new Mesh(id, scene)
+  const vd = new VertexData()
+  vd.positions = geo.positions
+  vd.normals = geo.normals
+  vd.indices = geo.indices
+  vd.colors = geo.colors
+  vd.applyToMesh(mesh, true)
+  const mat = new StandardMaterial('vm_' + id, scene)
+  mat.diffuseColor = new Color3(1, 1, 1)
+  mat.backFaceCulling = false
+  mesh.material = mat
+  return mesh
 }
