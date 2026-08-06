@@ -236,7 +236,7 @@ export function Editor() {
       scale: { x: 1, y: 1, z: 1 },
       color: { r: 1, g: 1, b: 1 },
       behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false },
-      terrain: { w: ww, h, d: ww, size, voxels: rleEncode(vox), mats: rleEncode(mat), rle: true }
+      terrain: { w: ww, h, d: ww, size, voxels: rleEncode(vox), mats: rleEncode(mat), water: rleEncode(new Uint8Array(ww * h * ww)), rle: true }
     }
     setObjects([...objects.filter((o) => o.type !== 'terrain'), t])
   }
@@ -250,7 +250,7 @@ export function Editor() {
     generateVoxelHills(vox, mat, td.w, td.h, td.d, td.size, 8, Math.random() * 100)
     const updated: SceneObject = {
       ...terrain,
-      terrain: { ...td, voxels: rleEncode(vox), mats: rleEncode(mat), rle: true }
+      terrain: { ...td, voxels: rleEncode(vox), mats: rleEncode(mat), water: rleEncode(new Uint8Array(td.w * td.h * td.d)), rle: true }
     }
     setObjects(objects.map((o) => (o.id === terrain.id ? updated : o)))
   }
@@ -311,11 +311,11 @@ export function Editor() {
     setObjects(objects.filter((o) => o.type !== 'terrain'))
   }
 
-  const commitTerrain = (voxels: string, mats: string) => {
+  const commitTerrain = (voxels: string, mats: string, water?: string) => {
     if (!terrain?.terrain) return
     const updated: SceneObject = {
       ...terrain,
-      terrain: { ...terrain.terrain, voxels, mats, rle: true }
+      terrain: { ...terrain.terrain, voxels, mats, rle: true, ...(water !== undefined ? { water } : {}) }
     }
     setObjects(objects.map((o) => (o.id === terrain.id ? updated : o)))
   }
