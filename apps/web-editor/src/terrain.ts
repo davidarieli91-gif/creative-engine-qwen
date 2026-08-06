@@ -7,7 +7,7 @@ export interface TerrainData {
   colors: number[]
 }
 
-export type TerrainTool = 'raise' | 'lower' | 'smooth' | 'flatten' | 'paint'
+export type TerrainTool = 'raise' | 'lower' | 'smooth' | 'flatten' | 'paint' | 'explode' 'raise' | 'lower' | 'smooth' | 'flatten' | 'paint'
 
 export function makeHeights(sub: number): Float32Array {
   return new Float32Array((sub + 1) * (sub + 1))
@@ -154,11 +154,10 @@ export interface VoxelTerrainData {
 }
 
 export const VOX_PALETTE: number[][] = [
-  [0.36, 0.55, 0.3],
-  [0.55, 0.57, 0.6],
-  [0.85, 0.76, 0.54],
-  [0.95, 0.97, 1.0],
-  [0.45, 0.33, 0.22]
+  [0.36, 0.55, 0.3], [0.55, 0.57, 0.6], [0.85, 0.76, 0.54], [0.95, 0.97, 1.0],
+  [0.45, 0.33, 0.22], [0.75, 0.35, 0.2], [0.9, 0.6, 0.1], [0.9, 0.85, 0.2],
+  [0.3, 0.6, 0.7], [0.2, 0.3, 0.6], [0.6, 0.3, 0.6], [0.9, 0.4, 0.6],
+  [0.1, 0.1, 0.1], [0.9, 0.9, 0.9], [0.5, 0.35, 0.15], [0.35, 0.25, 0.5]
 ]
 
 export function bytesToB64(u8: Uint8Array): string {
@@ -320,7 +319,7 @@ export function applyVoxelBrush(
             vox[i] = 1
             mat[i] = matForHeight(y, h)
           }
-        } else if (tool === 'lower') {
+                } else if (tool === 'lower' || tool === 'explode') {           vox[i] = 0
           vox[i] = 0
         } else if (tool === 'paint') {
           if (vox[i] && isSurface(vox, w, h, d, x, y, z)) mat[i] = paintId
@@ -347,14 +346,17 @@ export function buildVoxelGeometryRegion(
   const normals: number[] = []
   const colors: number[] = []
   const indices: number[] = []
+  const solid = (x: number, y: number, z: number) =>
+    y < 0 ? true : x >= 0 && y >= 0 && z >= 0 && x < w && y < h && z < d && vox[(y * d + z) * w + x] === 1
+  const AO = [0.42, 0.62, 0.82, 1]
 
   const FACES = [
-    { dir: [1, 0, 0], shade: 0.8, corners: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]] },
-    { dir: [-1, 0, 0], shade: 0.7, corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]] },
-    { dir: [0, 1, 0], shade: 1.0, corners: [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]] },
-    { dir: [0, -1, 0], shade: 0.5, corners: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]] },
-    { dir: [0, 0, 1], shade: 0.9, corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]] },
-    { dir: [0, 0, -1], shade: 0.6, corners: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]] }
+    { n: [1, 0, 0], shade: 0.8, corners: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]] },
+    { n: [-1, 0, 0], shade: 0.7, corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]] },
+    { n: [0, 1, 0], shade: 1.0, corners: [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]] },
+    { n: [0, -1, 0], shade: 0.5, corners: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]] },
+    { n: [0, 0, 1], shade: 0.9, corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]] },
+    { n: [0, 0, -1], shade: 0.6, corners: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]] }
   ]
 
   for (let y = 0; y < h; y++) {
@@ -364,16 +366,33 @@ export function buildVoxelGeometryRegion(
         if (!vox[i]) continue
         const pal = VOX_PALETTE[mat[i]] || VOX_PALETTE[0]
         for (const f of FACES) {
-          const nx = x + f.dir[0]
-          const ny = y + f.dir[1]
-          const nz = z + f.dir[2]
+          const nx = x + f.n[0], ny = y + f.n[1], nz = z + f.n[2]
           if (ny < 0) continue
           if (nx >= 0 && ny >= 0 && nz >= 0 && nx < w && ny < h && nz < d && vox[(ny * d + nz) * w + nx]) continue
           const base = positions.length / 3
           for (const c of f.corners) {
+            const sy = c[1] === 1 ? 1 : -1
+            const sz = c[2] === 1 ? 1 : -1
+            const sx = c[0] === 1 ? 1 : -1
+            let a1: number, a2: number, a3: number
+            if (f.n[0] !== 0) {
+              a1 = solid(nx, y + sy, z) ? 1 : 0
+              a2 = solid(nx, y, z + sz) ? 1 : 0
+              a3 = solid(nx, y + sy, z + sz) ? 1 : 0
+            } else if (f.n[1] !== 0) {
+              a1 = solid(x + sx, ny, z) ? 1 : 0
+              a2 = solid(x, ny, z + sz) ? 1 : 0
+              a3 = solid(x + sx, ny, z + sz) ? 1 : 0
+            } else {
+              a1 = solid(x + sx, y, nz) ? 1 : 0
+              a2 = solid(x, y + sy, nz) ? 1 : 0
+              a3 = solid(x + sx, y + sy, nz) ? 1 : 0
+            }
+            const ao = a1 && a2 ? 0 : 3 - (a1 + a2 + a3)
+            const light = f.shade * AO[ao]
             positions.push((x + c[0] - w / 2) * size, (y + c[1]) * size, (z + c[2] - d / 2) * size)
-            normals.push(f.dir[0], f.dir[1], f.dir[2])
-            colors.push(pal[0] * f.shade, pal[1] * f.shade, pal[2] * f.shade, 1)
+            normals.push(f.n[0], f.n[1], f.n[2])
+            colors.push(pal[0] * light, pal[1] * light, pal[2] * light, 1)
           }
           indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
         }
