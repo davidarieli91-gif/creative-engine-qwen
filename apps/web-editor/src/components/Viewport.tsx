@@ -310,35 +310,99 @@ export function Viewport(props: ViewportProps) {
         w.waterMesh.dispose()
         w.waterMesh = null
       }
-      const geo = buildWaterGeometry(w.vox, w.wat, w.w, w.h, w.d, w.size)
-      if (geo.indices.length === 0) return
-      if (!mat) {
-        try {
-          const wm = new WaterMaterial('watermat_' + w.id, sc)
-          const noise = new NoiseProceduralTexture('wbn_' + w.id, 256, sc)
-          noise.animationSpeedEnabled = true
-          wm.bumpTexture = noise
-          wm.windForce = 4
-          wm.waveLength = 0.8
-          wm.timeScale = 0.7
-          wm.bumpLevel = 2
-          wm.alpha = 0.75
-          mat = wm
-        } catch {
-          const sm = new StandardMaterial('watermat_' + w.id, sc)
-          sm.diffuseColor = new Color3(0.08, 0.3, 0.75)
-          sm.alpha = 0.7
-          sm.specularColor = new Color3(0.7, 0.9, 1)
-          sm.backFaceCulling = false
-          mat = sm
+      const W = w.w, H = w.h, D = w.d, size = w.size
+      const wat = w.wat, vox = w.vox
+      const wTop = new Float32Array(W * D)
+      const tTop = new Float32Array(W * D)
+      for (let z = 0; z < D; z++) {
+        for (let x = 0; x < W; x++) {
+          const ci = z * W + x
+          for (let y = H - 1; y >= 0; y--) {
+            const a = wat[(y * D + z) * W + x]
+            if (a > 0) { wTop[ci] = (y + a / 4) * size; break }
+          }
+          for (let y = H - 1; y >= 0; y--) {
+            if (vox[(y * D + z) * W + x]) { tTop[ci] = (y + 1) * size; break }
+          }
         }
+      }
+      const bl = new Float32Array(W * D)
+      for (let z = 0; z < D; z++) {
+        for (let x = 0; x < W; x++) {
+          const ci = z * W + x
+          if (!wTop[ci]) continue
+          let s = 0
+          let n = 0
+          for (let dz = -1; dz <= 1; dz++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx
+              const nz = z + dz
+              if (nx < 0 || nz < 0 || nx >= W || nz >= D) continue
+              if (wTop[nz * W + nx] > 0) { s += wTop[nz * W + nx]; n++ }
+            }
+          }
+          bl[ci] = s / n
+        }
+      }
+      const gw = W + 1
+      const gd = D + 1
+      const hs = new Float32Array(gw * gd)
+      const has = new Uint8Array(gw * gd)
+      for (let z = 0; z < gd; z++) {
+        for (let x = 0; x < gw; x++) {
+          let s = 0
+          let n = 0
+          for (let dz = 0; dz < 2; dz++) {
+            for (let dx = 0; dx < 2; dx++) {
+              const cx = x - 1 + dx
+              const cz = z - 1 + dz
+              if (cx < 0 || cz < 0 || cx >= W || cz >= D) continue
+              const v = bl[cz * W + cx]
+              if (v > 0 && v - tTop[cz * W + cx] >= 0.3 * size) { s += v; n++ }
+            }
+          }
+          if (n > 0) {
+            hs[z * gw + x] = s / n - 0.04 * size
+            has[z * gw + x] = 1
+          }
+        }
+      }
+      const positions: number[] = []
+      const normals: number[] = []
+      const indices: number[] = []
+      for (let z = 0; z < D; z++) {
+        for (let x = 0; x < W; x++) {
+          const a = z * gw + x
+          const b = a + 1
+          const c = a + gw
+          const e = c + 1
+          if (has[a] && has[b] && has[c] && has[e]) {
+            const base = positions.length / 3
+            positions.push((x - W / 2) * size, hs[a], (z - D / 2) * size)
+            positions.push((x + 1 - W / 2) * size, hs[b], (z - D / 2) * size)
+            positions.push((x + 1 - W / 2) * size, hs[e], (z + 1 - D / 2) * size)
+            positions.push((x - W / 2) * size, hs[c], (z + 1 - D / 2) * size)
+            for (let i = 0; i < 4; i++) normals.push(0, 1, 0)
+            indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
+          }
+        }
+      }
+      if (indices.length === 0) return
+      if (!mat) {
+        const sm = new StandardMaterial('watermat_' + w.id, sc)
+        sm.diffuseColor = new Color3(0.05, 0.35, 0.85)
+        sm.specularColor = new Color3(0.9, 0.9, 1)
+        sm.specularPower = 64
+        sm.emissiveColor = new Color3(0.01, 0.08, 0.2)
+        sm.alpha = 0.62
+        sm.backFaceCulling = false
+        mat = sm
       }
       const mesh = new Mesh(w.id + '_water', sc)
       const vd = new VertexData()
-      vd.positions = geo.positions
-      vd.normals = geo.normals
-      vd.uvs = geo.uvs
-      vd.indices = geo.indices
+      vd.positions = positions
+      vd.normals = normals
+      vd.indices = indices
       vd.applyToMesh(mesh, true)
       mesh.material = mat
       mesh.isPickable = false
