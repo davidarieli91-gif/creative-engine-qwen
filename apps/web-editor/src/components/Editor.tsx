@@ -225,11 +225,13 @@ export function Editor() {
     }
   }
 
-  const createTerrain = (w: number) => {
+  const createTerrain = (w: number, fine: boolean) => {
     if (isPlaying) return
-    const h = 48
-    const { vox, mat } = createVoxelField(w, h, w)
-    generateVoxelHills(vox, mat, w, h, w, 1, 8, Math.random() * 100)
+    const size = fine ? 0.5 : 1
+    const ww = fine ? Math.min(w, 256) : w
+    const h = fine ? 64 : 48
+    const { vox, mat } = createVoxelField(ww, h, ww)
+    generateVoxelHills(vox, mat, ww, h, ww, size, fine ? 10 : 8, Math.random() * 100)
     const t: SceneObject = {
       id: 'terrain_' + Date.now(),
       name: 'Terrain',
@@ -239,8 +241,10 @@ export function Editor() {
       scale: { x: 1, y: 1, z: 1 },
       color: { r: 1, g: 1, b: 1 },
       behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false },
-      terrain: { w, h, d: w, size: 1, voxels: rleEncode(vox), mats: rleEncode(mat), rle: true }
+      terrain: { w: ww, h, d: ww, size, voxels: rleEncode(vox), mats: rleEncode(mat), rle: true }
     }
+    setObjects([...objects.filter((o) => o.type !== 'terrain'), t])
+  }
     setObjects([...objects.filter((o) => o.type !== 'terrain'), t])
   }
 
