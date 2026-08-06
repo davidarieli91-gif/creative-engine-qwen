@@ -7,7 +7,7 @@ export interface TerrainData {
   colors: number[]
 }
 
-export type TerrainTool = 'raise' | 'lower' | 'smooth' | 'flatten' | 'paint' | 'explode'
+export type TerrainTool = 'raise' | 'lower' | 'smooth' | 'flatten' | 'paint' | 'explode' | 'pour' | 'dry'
 
 export function makeHeights(sub: number): Float32Array {
   return new Float32Array((sub + 1) * (sub + 1))
