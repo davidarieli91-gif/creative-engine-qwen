@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { Viewport } from './Viewport'
-import { SceneHierarchy } from './SceneHierarchy'
 import { ScenePanel } from './ScenePanel'
 import { Inspector } from './Inspector'
 import { Toolbar, GizmoMode } from './Toolbar'
@@ -87,9 +86,7 @@ function loadSavedProject(): SavedProject {
         logic: parsed.logic ?? { nodes: [], edges: [] }
       }
     }
-  } catch {
-    // ignore
-  }
+  } catch { /* ignore */ }
   return { objects: [], logic: { nodes: [], edges: [] } }
 }
 
@@ -121,9 +118,7 @@ export function Editor() {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ objects, logic }))
-    } catch {
-      // проект слишком большой для автосохранения — используй 💾 Save в файл
-    }
+    } catch { /* проект слишком большой для автосохранения — используй Save в файл */ }
   }, [objects, logic])
 
   useEffect(() => {
@@ -243,8 +238,6 @@ export function Editor() {
       behaviors: { spin: false, bounce: false, patrol: false, player: false, float: false },
       terrain: { w: ww, h, d: ww, size, voxels: rleEncode(vox), mats: rleEncode(mat), rle: true }
     }
-    setObjects([...objects.filter((o) => o.type !== 'terrain'), t])
-  }
     setObjects([...objects.filter((o) => o.type !== 'terrain'), t])
   }
 
@@ -419,6 +412,9 @@ export function Editor() {
             onCommitTerrain={commitTerrain}
           />
 
+          <UndoRedo objects={objects} setObjects={setObjects} isPlaying={isPlaying} />
+          <FlyCam isPlaying={isPlaying} />
+
           {isPlaying && (
             <div style={{ position: 'absolute', top: 10, left: 12, fontSize: 20, fontWeight: 800, color: '#fff', textShadow: '0 1px 4px #000', pointerEvents: 'none' }}>
               🏆 {hud.score}
@@ -431,8 +427,6 @@ export function Editor() {
             </div>
           )}
 
-          <UndoRedo objects={objects} setObjects={setObjects} isPlaying={isPlaying} />
-          <FlyCam isPlaying={isPlaying} />
           <div style={{ position: 'absolute', bottom: 10, left: 10, display: 'flex', gap: 6 }}>
             <button className="btn" style={{ background: logicOpen ? '#0e639c' : '#3e3e42' }}
               onClick={() => { setLogicOpen(!logicOpen); setTerrainOpen(false); setWaterOpen(false) }}>
@@ -527,3 +521,4 @@ export function Editor() {
     </div>
   )
 }
+// END_EDITOR
