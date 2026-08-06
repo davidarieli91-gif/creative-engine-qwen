@@ -19,7 +19,7 @@ interface TerrainPanelProps {
   onDelete: () => void
 }
 
-const paintNames = ['🌿', '', '', '❄', '', '', '🟧', '🟨', '🩵', '🟦', '🟣', '🩷', '⬛', '', '', '']
+const paintNames = ['🌿', '', '', '❄', '', '', '🟧', '', '', '', '🟣', '🩷', '', '', '', '']
 
 export function TerrainPanel(props: TerrainPanelProps) {
   const [w, setW] = useState(128)
@@ -58,6 +58,8 @@ export function TerrainPanel(props: TerrainPanelProps) {
         {toolBtn('raise', '⬆ Насыпать')}
         {toolBtn('lower', '⛏ Копать')}
         {toolBtn('explode', '💥 Взрыв')}
+        {toolBtn('pour', '💧 Залить')}
+        {toolBtn('dry', '☀ Сушить')}
         {toolBtn('smooth', '〰 Сгладить')}
         {toolBtn('flatten', '⏹ Выровнять')}
         {toolBtn('paint', '🎨 Краска')}
@@ -73,13 +75,9 @@ export function TerrainPanel(props: TerrainPanelProps) {
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
           {paintNames.map((p, idx) => (
             <button key={idx} className="btn"
-              style={{
-                background: props.paintId === idx ? '#0e639c' : '#3e3e42',
-                padding: '3px 7px'
-              }}
+              style={{ background: props.paintId === idx ? '#0e639c' : '#3e3e42', padding: '3px 7px' }}
               onClick={() => props.onPaintId(idx)}
-              title={`Материал ${idx}`}
-            >
+              title={`Материал ${idx}`}>
               {p}
             </button>
           ))}
@@ -103,7 +101,7 @@ export function TerrainPanel(props: TerrainPanelProps) {
             onChange={(e) => props.onStrength(parseFloat(e.target.value))} />
           {props.strength}
         </label>
-        <span style={{ color: '#888' }}>💥 Взрыв — как в Teardown: разрушает сферу вокселей!</span>
+        <span style={{ color: '#888' }}>💧 Залей воду в яму — она растечётся и заполнит её, как у John Lin!</span>
       </div>
     </div>
   )
