@@ -7,6 +7,7 @@ import { LogicEditor } from './LogicEditor'
 import { TerrainPanel } from './TerrainPanel'
 import { Wizard } from './Wizard'
 import { FlyCam } from './FlyCam'
+import { SkySystem } from './SkySystem'
 import { UndoRedo } from './UndoRedo'
 import { LogicData } from '../logic'
 import { WizardConfig, generateProject } from '../wizard'
@@ -414,6 +415,7 @@ export function Editor() {
 
           <UndoRedo objects={objects} setObjects={setObjects} isPlaying={isPlaying} />
           <FlyCam isPlaying={isPlaying} />
+                    <SkySystem />
 
           {isPlaying && (
             <div style={{ position: 'absolute', top: 10, left: 12, fontSize: 20, fontWeight: 800, color: '#fff', textShadow: '0 1px 4px #000', pointerEvents: 'none' }}>
