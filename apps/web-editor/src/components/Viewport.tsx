@@ -9,6 +9,7 @@ import { SceneObject } from './Editor'
 import { GizmoMode } from './Toolbar'
 import { LogicData, LogicNode, buildChains } from '../logic'
 import { playSound } from '../sound'
+import { WATER_MAX, setWaterSphere, stepWater, buildWaterGeometry, topWaterAt } from '../water'
 import {
   TerrainTool, VoxelTerrainData, CHUNK, b64ToBytes, rleDecode, rleEncode,
   buildVoxelGeometryRegion, createVoxelMesh, applyVoxelBrush, topHeightAt
@@ -56,7 +57,7 @@ function raycastVoxels(vox: Uint8Array, w: number, h: number, d: number, size: n
   }
   return null
 }
-interface TerrainWork { id: string; w: number; h: number; d: number; size: number; vox: Uint8Array; mat: Uint8Array; srcV: string; srcM: string; chunks: Map<string, Mesh> }
+interface TerrainWork { id: string; w: number; h: number; d: number; size: number; vox: Uint8Array; mat: Uint8Array; wat: Uint8Array; srcV: string; srcM: string; srcW: string; chunks: Map<string, Mesh>; waterMesh: Mesh | null; waterDirty: boolean }
 interface WaterWork { id: string; sub: number; size: number; mesh: Mesh; base: Float32Array; positions: Float32Array; normals: Float32Array; indices: number[] }
 
 export function Viewport(props: ViewportProps) {
@@ -92,6 +93,7 @@ export function Viewport(props: ViewportProps) {
   const scoreRef = useRef(0)
   const runtimeHiddenRef = useRef<Set<string>>(new Set())
   const playerVyRef = useRef(0)
+  const lastWaterSimRef = useRef(0)
   const toolRef = useRef(props.terrainTool)
   const radiusRef = useRef(props.brushRadius)
   const strengthRef = useRef(props.brushStrength)
@@ -264,8 +266,13 @@ export function Viewport(props: ViewportProps) {
         const pz = (bz + 0.5 - w.d / 2) * w.size
         applyVoxelBrush(w.vox, w.mat, w.w, w.h, w.d, w.size, px, py, pz, radiusRef.current, tool, paintRef.current)
         if (tool === 'explode') playSound('boom')
-        const r = radiusRef.current + 1
-        remeshRegion(w, px - r, pz - r, px + r, pz + r)
+        if (tool === 'pour' || tool === 'dry') {
+          setWaterSphere(w.wat, w.vox, w.w, w.h, w.d, w.size, px, py, pz, radiusRef.current, tool === 'pour' ? WATER_MAX : 0)
+          w.waterDirty = true
+        } else {
+          const r = radiusRef.current + 1
+          remeshRegion(w, px - r, pz - r, px + r, pz + r)
+        }
       } catch (err) { console.error('[terrain] sculpt error', err) }
     }
     const onPointerDown = (e: PointerEvent) => {
@@ -286,7 +293,7 @@ export function Viewport(props: ViewportProps) {
       if (!sculpting) return
       sculpting = false
       const w = terrainWorkRef.current
-      if (w) commitRef.current(rleEncode(w.vox), rleEncode(w.mat))
+      if (w) commitRef.current(rleEncode(w.vox), rleEncode(w.mat), rleEncode(w.wat))
     }
     canvasRef.current.addEventListener('pointerdown', onPointerDown)
     canvasRef.current.addEventListener('pointermove', onPointerMove)
@@ -294,9 +301,38 @@ export function Viewport(props: ViewportProps) {
     const resizeObserver = new ResizeObserver(() => engine.resize())
     if (canvasRef.current.parentElement) resizeObserver.observe(canvasRef.current.parentElement)
 
+    const rebuildWaterMesh = (w: TerrainWork) => {
+      const sc = sceneRef.current
+      if (!sc) return
+      if (w.waterMesh) { w.waterMesh.dispose(); w.waterMesh = null }
+      const geo = buildWaterGeometry(w.vox, w.wat, w.w, w.h, w.d, w.size)
+      if (geo.indices.length === 0) return
+      const mesh = new Mesh(w.id + '_water', sc)
+      const vd = new VertexData()
+      vd.positions = geo.positions
+      vd.normals = geo.normals
+      vd.indices = geo.indices
+      vd.colors = geo.colors
+      vd.applyToMesh(mesh, true)
+      const m = new StandardMaterial('watermat_' + w.id, sc)
+      m.diffuseColor = new Color3(0.1, 0.35, 0.85)
+      m.alpha = 0.65
+      m.backFaceCulling = false
+      m.specularColor = new Color3(0.6, 0.8, 1)
+      mesh.material = m
+      mesh.isPickable = false
+      w.waterMesh = mesh
+    }
     engine.runRenderLoop(() => {
       const nowAll = performance.now()
       const tAll = nowAll / 1000
+      const twk = terrainWorkRef.current
+      if (twk && twk.waterDirty && nowAll - lastWaterSimRef.current > 120) {
+        lastWaterSimRef.current = nowAll
+        const moved = stepWater(twk.vox, twk.wat, twk.w, twk.h, twk.d)
+        if (!moved) twk.waterDirty = false
+        rebuildWaterMesh(twk)
+      }
       const ww = waterWorkRef.current
       const wd = waterDataRef.current
       if (ww && wd && nowAll - lastWaterRef.current > 33) {
@@ -359,9 +395,13 @@ export function Viewport(props: ViewportProps) {
               if (!playerObj.behaviors?.float) pm.rotationQuaternion = Quaternion.RotationYawPitchRoll(Math.atan2(move.x, move.z), 0, 0)
             }
                    if (!playerObj.behaviors?.bounce && !playerObj.behaviors?.float) {
-              const groundY = tw
+              const solidY = tw
                 ? topHeightAt(tw.vox, tw.w, tw.h, tw.d, tw.size, pm.position.x, pm.position.z) + 0.5
                 : 0.5
+              const waterY = tw
+                ? topWaterAt(tw.wat, tw.w, tw.h, tw.d, tw.size, pm.position.x, pm.position.z) + 0.2
+                : 0
+              const groundY = Math.max(solidY, waterY)
               let vy = playerVyRef.current
               vy -= 22 * dt
               let y = pm.position.y + vy * dt
@@ -483,19 +523,22 @@ export function Viewport(props: ViewportProps) {
       const td = tObj.terrain as VoxelTerrainData
       const w0 = terrainWorkRef.current
       if (!w0 || w0.id !== tObj.id || w0.srcV !== td.voxels || w0.srcM !== td.mats) {
-        if (w0) disposeChunks(w0)
+        if (w0) { disposeChunks(w0); if (w0.waterMesh) w0.waterMesh.dispose() }(w0)
         const len = td.w * td.h * td.d
         const vox = td.rle ? rleDecode(td.voxels, len) : b64ToBytes(td.voxels)
         const mat = td.rle ? rleDecode(td.mats, len) : b64ToBytes(td.mats)
+        const wat = td.water ? rleDecode(td.water, len) : new Uint8Array(len)
         const work: TerrainWork = {
           id: tObj.id, w: td.w, h: td.h, d: td.d, size: td.size,
-          vox, mat, srcV: td.voxels, srcM: td.mats, chunks: new Map()
+          vox, mat, wat, srcV: td.voxels, srcM: td.mats, srcW: td.water || '',
+          chunks: new Map(), waterMesh: null, waterDirty: true
         }
         terrainWorkRef.current = work
         remeshAll(work)
       }
     } else if (terrainWorkRef.current) {
       disposeChunks(terrainWorkRef.current)
+      if (terrainWorkRef.current.waterMesh) terrainWorkRef.current.waterMesh.dispose()
       terrainWorkRef.current = null
     }
 
