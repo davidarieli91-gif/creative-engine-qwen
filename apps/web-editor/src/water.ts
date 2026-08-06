@@ -1,5 +1,4 @@
-// Воксельная вода: гидравлический клеточный автомат того же класса,
-// что в John Lin demo, voxel-watersim [4], VoxelWorld [6] и "The Game of Flow" [17].
+// Воксельная вода: выравнивающий клеточный автомат [11] + рендер только реальной воды [4], [7]
 
 export const WATER_MAX = 4
 
@@ -56,12 +55,14 @@ export function stepWater(vox: Uint8Array, wat: Uint8Array, w: number, h: number
           if (!valid[n]) continue
           const ni = nbs[n]
           if (vox[ni]) continue
-          if (a - wat[ni] >= 2) {
-            wat[ni] += 1
-            wat[i] -= 1
+          const diff = a - wat[ni]
+          if (diff >= 2) {
+            const t = diff >> 1
+            wat[ni] += t
+            wat[i] -= t
             moved = true
             a = wat[i]
-            if (a <= 1) break
+            if (a <= 0) break
           }
         }
       }
@@ -73,44 +74,95 @@ export function stepWater(vox: Uint8Array, wat: Uint8Array, w: number, h: number
 export function buildWaterGeometry(
   vox: Uint8Array, wat: Uint8Array, w: number, h: number, d: number, size: number
 ) {
-  const positions: number[] = []
-  const normals: number[] = []
-  const colors: number[] = []
-  const indices: number[] = []
-  const FACES = [
-    { n: [1, 0, 0], shade: 0.8, corners: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]] },
-    { n: [-1, 0, 0], shade: 0.7, corners: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]] },
-    { n: [0, 1, 0], shade: 1.0, corners: [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]] },
-    { n: [0, -1, 0], shade: 0.5, corners: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]] },
-    { n: [0, 0, 1], shade: 0.9, corners: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]] },
-    { n: [0, 0, -1], shade: 0.6, corners: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]] }
-  ]
-  for (let y = 0; y < h; y++) {
-    for (let z = 0; z < d; z++) {
-      for (let x = 0; x < w; x++) {
-        const i = (y * d + z) * w + x
-        if (!wat[i]) continue
-        const fill = wat[i] / WATER_MAX
-        for (const f of FACES) {
-          const nx = x + f.n[0]
-          const ny = y + f.n[1]
-          const nz = z + f.n[2]
-          if (ny < 0) continue
-          const inside = nx >= 0 && ny >= 0 && nz >= 0 && nx < w && ny < h && nz < d
-          if (inside && (wat[(ny * d + nz) * w + nx] > 0 || vox[(ny * d + nz) * w + nx] === 1)) continue
-          const base = positions.length / 3
-          for (const c of f.corners) {
-            const topY = f.n[1] === 1 ? y + fill : c[1]
-            positions.push((x + c[0] - w / 2) * size, topY * size, (z + c[2] - d / 2) * size)
-            normals.push(f.n[0], f.n[1], f.n[2])
-            colors.push(0.1 * f.shade, 0.35 * f.shade, 0.85 * f.shade, 1)
-          }
-          indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
-        }
+  const wTop = new Float32Array(w * d)
+  const tTop = new Float32Array(w * d)
+  for (let z = 0; z < d; z++) {
+    for (let x = 0; x < w; x++) {
+      const ci = z * w + x
+      for (let y = h - 1; y >= 0; y--) {
+        const a = wat[(y * d + z) * w + x]
+        if (a > 0) { wTop[ci] = (y + a / WATER_MAX) * size; break }
+      }
+      for (let y = h - 1; y >= 0; y--) {
+        if (vox[(y * d + z) * w + x]) { tTop[ci] = (y + 1) * size; break }
       }
     }
   }
-  return { positions, normals, colors, indices }
+  const bl = new Float32Array(w * d)
+  for (let z = 0; z < d; z++) {
+    for (let x = 0; x < w; x++) {
+      const ci = z * w + x
+      if (!wTop[ci]) { bl[ci] = 0; continue }
+      let s = 0
+      let n = 0
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx
+          const nz = z + dz
+          if (nx < 0 || nz < 0 || nx >= w || nz >= d) continue
+          const v = wTop[nz * w + nx]
+          if (v > 0) { s += v; n++ }
+        }
+      }
+      bl[ci] = s / n
+    }
+  }
+
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+  const X = (x: number) => (x - w / 2) * size
+  const Z = (z: number) => (z - d / 2) * size
+
+  const quad = (pts: number[][], nrm: number[]) => {
+    const base = positions.length / 3
+    for (const p of pts) {
+      positions.push(p[0], p[1], p[2])
+      normals.push(nrm[0], nrm[1], nrm[2])
+      uvs.push(p[0] / (size * 6), p[2] / (size * 6))
+    }
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
+  }
+
+  for (let z = 0; z < d; z++) {
+    for (let x = 0; x < w; x++) {
+      const ci = z * w + x
+      const top = bl[ci]
+      if (top <= 0) continue
+      const x0 = X(x)
+      const x1 = X(x + 1)
+      const z0 = Z(z)
+      const z1 = Z(z + 1)
+      quad([[x0, top, z0], [x1, top, z0], [x1, top, z1], [x0, top, z1]], [0, 1, 0])
+
+      const nX = [x + 1, x - 1, x, x]
+      const nZ = [z, z, z + 1, z - 1]
+      for (let k = 0; k < 4; k++) {
+        const nx = nX[k]
+        const nz = nZ[k]
+        const inb = nx >= 0 && nz >= 0 && nx < w && nz < d
+        const nw = inb ? bl[nz * w + nx] : 0
+        const nt = inb ? tTop[nz * w + nx] : 0
+        let bottom = -1
+        if (!inb) {
+          bottom = Math.max(tTop[ci] - 1, top - 3)
+        } else if (nw > 0) {
+          if (nw < top - 0.05) bottom = nw
+          else continue
+        } else {
+          if (nt >= top - 0.05) continue
+          bottom = Math.max(nt, top - 3)
+        }
+        if (bottom < 0) continue
+        if (k === 0) quad([[x1, top, z0], [x1, top, z1], [x1, bottom, z1], [x1, bottom, z0]], [1, 0, 0])
+        else if (k === 1) quad([[x0, top, z0], [x0, bottom, z0], [x0, bottom, z1], [x0, top, z1]], [-1, 0, 0])
+        else if (k === 2) quad([[x0, top, z1], [x1, top, z1], [x1, bottom, z1], [x0, bottom, z1]], [0, 0, 1])
+        else quad([[x0, top, z0], [x0, bottom, z0], [x1, bottom, z0], [x1, top, z0]], [0, 0, -1])
+      }
+    }
+  }
+  return { positions, normals, uvs, indices }
 }
 
 export function topWaterAt(
