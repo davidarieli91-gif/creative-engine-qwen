@@ -1,4 +1,5 @@
-// Воксельная вода: выравнивающий клеточный автомат [11] + рендер только реальной воды [4], [7]
+// Воксельная вода: CA с поверхностным натяжением (лужи, а не плёнка) +
+// рендер только реальной воды. Следующим шагом — GPU heightfield (shallow water) [15], [16].
 
 export const WATER_MAX = 4
 
@@ -36,6 +37,7 @@ export function stepWater(vox: Uint8Array, wat: Uint8Array, w: number, h: number
         const i = (y * d + z) * w + x
         let a = wat[i]
         if (!a) continue
+        // 1) падение вниз (водопады, заполнение ям)
         if (y > 0) {
           const bi = i - DW
           if (!vox[bi] && wat[bi] < WATER_MAX) {
@@ -49,6 +51,8 @@ export function stepWater(vox: Uint8Array, wat: Uint8Array, w: number, h: number
         }
         const belowBlocked = y === 0 || vox[i - DW] || wat[i - DW] >= WATER_MAX
         if (!belowBlocked) continue
+        // 2) растекание ТОЛЬКО для объёмной воды (поверхностное натяжение)
+        if (a < 3) continue
         const nbs = [i - 1, i + 1, i - w, i + w]
         const valid = [x > 0, x < w - 1, z > 0, z < d - 1]
         for (let n = 0; n < 4; n++) {
@@ -56,13 +60,13 @@ export function stepWater(vox: Uint8Array, wat: Uint8Array, w: number, h: number
           const ni = nbs[n]
           if (vox[ni]) continue
           const diff = a - wat[ni]
-          if (diff >= 2) {
+          if (diff >= 3) {
             const t = diff >> 1
             wat[ni] += t
             wat[i] -= t
             moved = true
             a = wat[i]
-            if (a <= 0) break
+            if (a < 3) break
           }
         }
       }
@@ -128,8 +132,10 @@ export function buildWaterGeometry(
   for (let z = 0; z < d; z++) {
     for (let x = 0; x < w; x++) {
       const ci = z * w + x
-      const top = bl[ci]
+      const top = bl[ci] - 0.05 * size
       if (top <= 0) continue
+      // плёнку тоньше 0.25 не рендерим — вода видна только как реальная масса
+      if (top - tTop[ci] < 0.25 * size) continue
       const x0 = X(x)
       const x1 = X(x + 1)
       const z0 = Z(z)
@@ -148,7 +154,7 @@ export function buildWaterGeometry(
         if (!inb) {
           bottom = Math.max(tTop[ci] - 1, top - 3)
         } else if (nw > 0) {
-          if (nw < top - 0.05) bottom = nw
+          if (nw - 0.05 * size < top - 0.05) bottom = nw - 0.05 * size
           else continue
         } else {
           if (nt >= top - 0.05) continue
