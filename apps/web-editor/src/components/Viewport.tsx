@@ -263,6 +263,7 @@ export function Viewport(props: ViewportProps) {
         const py = (by + 0.5) * w.size
         const pz = (bz + 0.5 - w.d / 2) * w.size
         applyVoxelBrush(w.vox, w.mat, w.w, w.h, w.d, w.size, px, py, pz, radiusRef.current, tool, paintRef.current)
+        if (tool === 'explode') playSound('boom')
         const r = radiusRef.current + 1
         remeshRegion(w, px - r, pz - r, px + r, pz + r)
       } catch (err) { console.error('[terrain] sculpt error', err) }
