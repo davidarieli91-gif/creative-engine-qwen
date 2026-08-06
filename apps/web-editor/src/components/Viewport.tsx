@@ -310,71 +310,19 @@ export function Viewport(props: ViewportProps) {
         w.waterMesh.dispose()
         w.waterMesh = null
       }
-      const W = w.w, H = w.h, D = w.d, size = w.size
-      const wat = w.wat, vox = w.vox
-      let any = false
-      for (let i = 0; i < wat.length; i++) if (wat[i]) { any = true; break }
-      if (!any) return
-      const colTop = (cx: number, cz: number): number => {
-        if (cx < 0 || cz < 0 || cx >= W || cz >= D) return 0
-        for (let y = H - 1; y >= 0; y--) {
-          const a = wat[(y * D + cz) * W + cx]
-          if (a > 0) return (y + a / 4) * size
-        }
-        return 0
-      }
-      const gw = W + 1, gd = D + 1
-      const positions: number[] = []
-      const normals: number[] = []
-      const uvs: number[] = []
-      const indices: number[] = []
-      for (let z = 0; z < gd; z++) {
-        for (let x = 0; x < gw; x++) {
-          let s = 0, n = 0
-          for (let dz = 0; dz < 2; dz++) {
-            for (let dx = 0; dx < 2; dx++) {
-              const t = colTop(x - 1 + dx, z - 1 + dz)
-              if (t > 0) { s += t; n++ }
-            }
-          }
-          let hgt = n > 0 ? s / n : -9999
-          if (hgt < 0) {
-            const cx = Math.min(W - 1, x)
-            const cz = Math.min(D - 1, z)
-            let t = 0
-            for (let y = H - 1; y >= 0; y--) {
-              if (vox[(y * D + cz) * W + cx]) { t = y * size; break }
-            }
-            hgt = t - 2
-          }
-          positions.push((x - W / 2) * size, hgt, (z - D / 2) * size)
-          normals.push(0, 1, 0)
-          uvs.push(x / 6, z / 6)
-        }
-      }
-      for (let z = 0; z < D; z++) {
-        for (let x = 0; x < W; x++) {
-          const a = z * gw + x
-          const b = a + 1
-          const c = a + gw
-          const e = c + 1
-          indices.push(a, c, b, b, c, e)
-        }
-      }
-      const nrm = new Float32Array(positions.length)
-      VertexData.ComputeNormals(positions as any, indices as any, nrm as any)
-      for (let i = 0; i < nrm.length; i++) normals[i] = nrm[i]
+      const geo = buildWaterGeometry(w.vox, w.wat, w.w, w.h, w.d, w.size)
+      if (geo.indices.length === 0) return
       if (!mat) {
         try {
           const wm = new WaterMaterial('watermat_' + w.id, sc)
           const noise = new NoiseProceduralTexture('wbn_' + w.id, 256, sc)
           noise.animationSpeedEnabled = true
           wm.bumpTexture = noise
-          wm.windForce = 5
+          wm.windForce = 4
           wm.waveLength = 0.8
-          wm.timeScale = 0.8
-          wm.bumpLevel = 3
-          wm.alpha = 0.8
+          wm.timeScale = 0.7
+          wm.bumpLevel = 2
+          wm.alpha = 0.75
           mat = wm
         } catch {
           const sm = new StandardMaterial('watermat_' + w.id, sc)
@@ -387,10 +335,10 @@ export function Viewport(props: ViewportProps) {
       }
       const mesh = new Mesh(w.id + '_water', sc)
       const vd = new VertexData()
-      vd.positions = positions
-      vd.normals = normals
-      vd.uvs = uvs
-      vd.indices = indices
+      vd.positions = geo.positions
+      vd.normals = geo.normals
+      vd.uvs = geo.uvs
+      vd.indices = geo.indices
       vd.applyToMesh(mesh, true)
       mesh.material = mat
       mesh.isPickable = false
