@@ -7,7 +7,7 @@ export interface TerrainData {
   colors: number[]
 }
 
-export type TerrainTool = 'raise' | 'lower' | 'smooth' | 'flatten' | 'paint' | 'explode' 'raise' | 'lower' | 'smooth' | 'flatten' | 'paint'
+export type TerrainTool = 'raise' | 'lower' | 'smooth' | 'flatten' | 'paint' | 'explode'
 
 export function makeHeights(sub: number): Float32Array {
   return new Float32Array((sub + 1) * (sub + 1))
@@ -139,7 +139,7 @@ export function createTerrainMesh(scene: Scene, id: string, geo: any): Mesh {
   return mesh
 }
 
-// ================= ВОКСЕЛИ (чанки, RLE) =================
+// ================= ВОКСЕЛИ (чанки, RLE, AO) =================
 
 export const CHUNK = 32
 
@@ -319,7 +319,7 @@ export function applyVoxelBrush(
             vox[i] = 1
             mat[i] = matForHeight(y, h)
           }
-                } else if (tool === 'lower' || tool === 'explode') {           vox[i] = 0
+        } else if (tool === 'lower' || tool === 'explode') {
           vox[i] = 0
         } else if (tool === 'paint') {
           if (vox[i] && isSurface(vox, w, h, d, x, y, z)) mat[i] = paintId
@@ -366,24 +366,27 @@ export function buildVoxelGeometryRegion(
         if (!vox[i]) continue
         const pal = VOX_PALETTE[mat[i]] || VOX_PALETTE[0]
         for (const f of FACES) {
-          const nx = x + f.n[0], ny = y + f.n[1], nz = z + f.n[2]
+          const nx = x + f.n[0]
+          const ny = y + f.n[1]
+          const nz = z + f.n[2]
           if (ny < 0) continue
           if (nx >= 0 && ny >= 0 && nz >= 0 && nx < w && ny < h && nz < d && vox[(ny * d + nz) * w + nx]) continue
           const base = positions.length / 3
           for (const c of f.corners) {
             const sy = c[1] === 1 ? 1 : -1
             const sz = c[2] === 1 ? 1 : -1
-            const sx = c[0] === 1 ? 1 : -1
             let a1: number, a2: number, a3: number
             if (f.n[0] !== 0) {
               a1 = solid(nx, y + sy, z) ? 1 : 0
               a2 = solid(nx, y, z + sz) ? 1 : 0
               a3 = solid(nx, y + sy, z + sz) ? 1 : 0
             } else if (f.n[1] !== 0) {
+              const sx = c[0] === 1 ? 1 : -1
               a1 = solid(x + sx, ny, z) ? 1 : 0
               a2 = solid(x, ny, z + sz) ? 1 : 0
               a3 = solid(x + sx, ny, z + sz) ? 1 : 0
             } else {
+              const sx = c[0] === 1 ? 1 : -1
               a1 = solid(x + sx, y, nz) ? 1 : 0
               a2 = solid(x, y + sy, nz) ? 1 : 0
               a3 = solid(x + sx, y + sy, nz) ? 1 : 0
@@ -444,3 +447,4 @@ export function heightmapToVoxels(td: TerrainData): VoxelTerrainData {
   }
   return { w, h, d, size, voxels: rleEncode(vox), mats: rleEncode(mat), rle: true }
 }
+// END_TERRAIN
